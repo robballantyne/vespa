@@ -49,6 +49,9 @@ class Backend:
     healthcheck_endpoint: Optional[str] = None
     allow_parallel_requests: bool = True
     max_wait_time: float = 10.0
+    ready_timeout: int = dataclasses.field(
+        default_factory=lambda: int(os.environ.get("READY_TIMEOUT", "1200"))
+    )
     reqnum = -1
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
@@ -107,7 +110,7 @@ class Backend:
         """Forward requests to the model endpoint as-is"""
         try:
             data = await request.json()
-            auth_data, payload = self.__parse_request(data)
+            auth_data, payload = self.__parse_request(data, request.path)
         except JsonDataException as e:
             return web.json_response(data=e.message, status=422)
         except json.JSONDecodeError:
@@ -207,13 +210,35 @@ class Backend:
                 self.sem.release()
             self.metrics._request_end(request_metrics)
 
-    @staticmethod
-    def __parse_request(data: dict) -> Tuple[AuthData, dict]:
-        """Parse request JSON into auth_data and payload"""
+    def __parse_request(self, data: dict, request_path: str = "/") -> Tuple[AuthData, dict]:
+        """Parse request JSON into auth_data and payload
+
+        In production mode (unsecured=false):
+            Requires both "auth_data" and "payload" fields
+
+        In local dev mode (unsecured=true):
+            Supports passthrough - if no "auth_data" field, treats entire request as payload
+        """
         errors = {}
         auth_data = None
         payload = None
 
+        # Passthrough mode: if unsecured and no auth_data, treat entire request as payload
+        if self.unsecured and "auth_data" not in data:
+            log.debug("Passthrough mode: treating entire request as payload")
+            payload = data
+            # Create minimal auth_data for metrics tracking
+            auth_data = AuthData(
+                cost="1.0",  # Default workload
+                endpoint=request_path,
+                reqnum=0,
+                request_idx=0,
+                signature="",
+                url=""
+            )
+            return (auth_data, payload)
+
+        # Standard mode: require both auth_data and payload
         try:
             if "auth_data" in data:
                 auth_data = AuthData.from_json_msg(data["auth_data"])
@@ -317,6 +342,38 @@ class Backend:
         timeout = ClientTimeout(total=10)
         return ClientSession(timeout=timeout, connector=connector)
 
+    async def __wait_for_backend_ready(self) -> None:
+        """Poll healthcheck endpoint until backend is ready or timeout"""
+        # Use configured endpoint or default to /health
+        endpoint = self.healthcheck_endpoint if self.healthcheck_endpoint else "/health"
+        url = f"{self.model_server_url}{endpoint}"
+
+        log.info(f"Waiting for backend to be ready at {url} (timeout: {self.ready_timeout}s)")
+
+        start_time = time.time()
+        retry_interval = 5  # Poll every 5 seconds
+
+        while True:
+            elapsed = time.time() - start_time
+
+            if elapsed >= self.ready_timeout:
+                error_msg = f"Backend failed to become ready after {self.ready_timeout} seconds"
+                log.error(error_msg)
+                self.backend_errored(error_msg)
+                raise RuntimeError(error_msg)
+
+            try:
+                async with self.healthcheck_session.get(url) as response:
+                    if response.status == 200:
+                        log.info(f"Backend is ready! (took {elapsed:.1f}s)")
+                        return
+                    else:
+                        log.debug(f"Backend not ready yet (status {response.status}), retrying...")
+            except Exception as e:
+                log.debug(f"Backend not reachable yet: {e}, retrying...")
+
+            await sleep(retry_interval)
+
     async def __healthcheck(self):
         """Periodic healthcheck of the backend"""
         if self.healthcheck_endpoint is None:
@@ -374,8 +431,8 @@ class Backend:
         except FileNotFoundError:
             pass
 
-        # Wait a bit for backend to be ready
-        await sleep(5)
+        # Wait for backend to be ready via healthcheck
+        await self.__wait_for_backend_ready()
 
         if self.benchmark_func is None:
             log.warning("No benchmark function provided, using default throughput of 1.0")

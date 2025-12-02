@@ -124,7 +124,8 @@ export BENCHMARK="my_module.benchmarks:my_function"
 | `MODEL_SERVER_URL` | Yes | - | Backend API URL (e.g., `http://localhost:8000`) |
 | `BENCHMARK` | Recommended | None | Python module path to benchmark function (e.g., `benchmarks.openai:benchmark`) |
 | `BACKEND` | No | `generic` | Worker type (use `generic` for new setup) |
-| `HEALTHCHECK_ENDPOINT` | No | None | Health check path (e.g., `/health`) |
+| `HEALTHCHECK_ENDPOINT` | No | `/health` | Health check path - defaults to `/health` if not specified |
+| `READY_TIMEOUT` | No | `1200` | Seconds to wait for backend ready before failing (default: 20 minutes) |
 | `ALLOW_PARALLEL` | No | `true` | Allow concurrent requests |
 | `MAX_WAIT_TIME` | No | `10.0` | Max queue wait time before rejecting (seconds) |
 | `WORKER_PORT` | No | `3000` | Port to listen on |
@@ -234,8 +235,24 @@ python server.py
 
 ### Testing Without Autoscaler
 
+**Passthrough Mode (Recommended):** When `UNSECURED=true`, just send requests directly!
+
 ```bash
-# Make a request directly (with mock auth_data)
+# Simple! Just like calling your backend API
+curl -X POST http://localhost:3000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "prompt": "Hello",
+    "max_tokens": 100
+  }'
+```
+
+Vespa automatically wraps your request for metrics tracking.
+
+**Production Format (Optional):** Test with full auth_data wrapper:
+
+```bash
 curl -X POST http://localhost:3000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
