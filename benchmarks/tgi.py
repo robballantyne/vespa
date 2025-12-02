@@ -1,0 +1,141 @@
+"""
+Benchmark function for Text Generation Inference (TGI) API.
+
+This benchmark measures throughput in tokens per second by sending concurrent
+generation requests to the TGI /generate endpoint.
+
+Usage:
+    BENCHMARK=benchmarks.tgi:benchmark
+
+TGI API format:
+    POST /generate
+    {
+        "inputs": "prompt text",
+        "parameters": {
+            "max_new_tokens": 256,
+            "temperature": 0.7,
+            ...
+        }
+    }
+"""
+import time
+import random
+import logging
+import asyncio
+from aiohttp import ClientSession
+
+try:
+    import nltk
+    nltk.download("words", quiet=True)
+    WORD_LIST = nltk.corpus.words.words()
+except Exception:
+    # Fallback word list if nltk not available
+    WORD_LIST = ["test", "benchmark", "performance", "throughput", "workload"] * 50
+
+log = logging.getLogger(__name__)
+
+
+async def benchmark(model_url: str, session: ClientSession, runs: int = 8) -> float:
+    """
+    Benchmark TGI API.
+
+    Args:
+        model_url: Base URL of the TGI server (e.g., "http://localhost:8080")
+        session: aiohttp ClientSession for making requests
+        runs: Number of benchmark runs (default: 8)
+
+    Returns:
+        max_throughput: Maximum tokens processed per second
+    """
+    endpoint = f"{model_url}/generate"
+
+    log.info(f"Benchmarking TGI API at {endpoint}")
+
+    # Generate test prompt
+    system_prompt = """You are a helpful AI assistant. You have access to the following knowledge base:
+
+    Zebras (US: /ˈziːbrəz/, UK: /ˈzɛbrəz, ˈziː-/)[2] (subgenus Hippotigris) are African equines
+    with distinctive black-and-white striped coats. There are three living species: Grévy's zebra
+    (Equus grevyi), the plains zebra (E. quagga), and the mountain zebra (E. zebra).
+
+    Please answer the following question based on the above context."""
+
+    # Initial warmup request
+    log.info("Warming up...")
+    warmup_prompt = " ".join(random.choices(WORD_LIST, k=50))
+    warmup_payload = {
+        "inputs": f"{system_prompt}\n\n{warmup_prompt}",
+        "parameters": {
+            "max_new_tokens": 100,
+            "temperature": 0.7,
+        }
+    }
+
+    try:
+        async with session.post(endpoint, json=warmup_payload) as response:
+            if response.status != 200:
+                log.error(f"Warmup failed with status {response.status}")
+                return 1.0
+    except Exception as e:
+        log.error(f"Warmup failed: {e}")
+        return 1.0
+
+    # Run benchmark
+    max_throughput = 0
+    sum_throughput = 0
+    concurrent_requests = 10  # TGI typically supports parallel
+
+    for run in range(1, runs + 1):
+        start = time.time()
+        workloads = []
+
+        # Create benchmark payloads
+        async def run_single_request():
+            prompt = " ".join(random.choices(WORD_LIST, k=250))
+            max_new_tokens = 256
+            payload = {
+                "inputs": f"{system_prompt}\n\n{prompt}",
+                "parameters": {
+                    "max_new_tokens": max_new_tokens,
+                    "temperature": 0.7,
+                }
+            }
+            workload = max_new_tokens  # Workload is max_new_tokens
+
+            try:
+                async with session.post(endpoint, json=payload) as response:
+                    if response.status == 200:
+                        return workload
+                    else:
+                        log.warning(f"Request failed with status {response.status}")
+                        return 0
+            except Exception as e:
+                log.warning(f"Request failed: {e}")
+                return 0
+
+        # Run concurrent requests
+        results = await asyncio.gather(*[run_single_request() for _ in range(concurrent_requests)])
+
+        total_workload = sum(results)
+        time_elapsed = time.time() - start
+        successful = sum(1 for w in results if w > 0)
+
+        if successful == 0:
+            log.error(f"Benchmark run {run} failed: no successful responses")
+            continue
+
+        throughput = total_workload / time_elapsed
+        sum_throughput += throughput
+        max_throughput = max(max_throughput, throughput)
+
+        log.info(
+            f"Run {run}/{runs}: {successful}/{concurrent_requests} successful, "
+            f"{total_workload} tokens in {time_elapsed:.2f}s = {throughput:.2f} tokens/s"
+        )
+
+    average_throughput = sum_throughput / runs if runs > 0 else 1.0
+    log.info(
+        f"Benchmark complete: avg={average_throughput:.2f} tokens/s, max={max_throughput:.2f} tokens/s"
+    )
+
+    return max_throughput if max_throughput > 0 else 1.0
