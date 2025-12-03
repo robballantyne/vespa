@@ -22,8 +22,10 @@ from aiohttp import web, ClientSession
 from lib.backend import Backend
 from lib.server import start_server
 
+# Configure logging from environment variable
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s[%(levelname)-5s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )

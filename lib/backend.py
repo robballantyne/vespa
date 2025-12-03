@@ -8,12 +8,10 @@ import logging
 from asyncio import wait, sleep, gather, Semaphore, FIRST_COMPLETED, create_task
 from typing import Tuple, Awaitable, NoReturn, Callable, Optional
 from functools import cached_property
-from distutils.util import strtobool
 
 from aiohttp import web, ClientResponse, ClientSession, ClientConnectorError, ClientTimeout, TCPConnector
 import asyncio
 
-import requests
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
@@ -29,8 +27,23 @@ VERSION = "0.3.0"
 
 log = logging.getLogger(__file__)
 
+# Configuration constants
 BENCHMARK_INDICATOR_FILE = ".has_benchmark"
 MAX_PUBKEY_FETCH_ATTEMPTS = 3
+HEALTHCHECK_RETRY_INTERVAL = 5  # seconds between healthcheck retries
+HEALTHCHECK_POLL_INTERVAL = 10  # seconds between periodic healthchecks
+HEALTHCHECK_TIMEOUT = 10  # seconds for healthcheck requests
+PUBKEY_FETCH_TIMEOUT = 10  # seconds for pubkey fetch
+METRICS_RETRY_DELAY = 2  # seconds between metrics retry attempts
+BENCHMARK_SLEEP_INTERVAL = 3600  # seconds to sleep after benchmark complete
+
+
+def create_tcp_connector(force_close: bool = True) -> TCPConnector:
+    """Create a standard TCP connector with consistent settings"""
+    return TCPConnector(
+        force_close=force_close,
+        enable_cleanup_closed=True,
+    )
 
 
 @dataclasses.dataclass
@@ -56,7 +69,7 @@ class Backend:
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     unsecured: bool = dataclasses.field(
-        default_factory=lambda: bool(strtobool(os.environ.get("UNSECURED", "false"))),
+        default_factory=lambda: os.environ.get("UNSECURED", "false").lower() == "true",
     )
     report_addr: str = dataclasses.field(
         default_factory=lambda: os.environ.get("REPORT_ADDR", "https://run.vast.ai")
@@ -81,12 +94,9 @@ class Backend:
 
     @cached_property
     def session(self):
+        """Main session for forwarding requests to backend API"""
         log.debug(f"starting session with {self.model_server_url}")
-        connector = TCPConnector(
-            force_close=True,  # Required for long running jobs
-            enable_cleanup_closed=True,
-        )
-
+        connector = create_tcp_connector(force_close=True)  # Required for long running jobs
         timeout = ClientTimeout(total=None)
         return ClientSession(self.model_server_url, timeout=timeout, connector=connector)
 
@@ -102,21 +112,73 @@ class Backend:
 
         return handler_fn
 
+    async def __parse_and_validate_request(
+        self, request: web.Request
+    ) -> Tuple[Optional[AuthData], Optional[dict], Optional[web.Response]]:
+        """Parse and validate incoming request. Returns (auth_data, payload, error_response)"""
+        try:
+            data = await request.json()
+            auth_data, payload = self.__parse_request(data, request.path)
+            return auth_data, payload, None
+        except JsonDataException as e:
+            return None, None, web.json_response(data=e.message, status=422)
+        except json.JSONDecodeError:
+            return None, None, web.json_response(dict(error="invalid JSON"), status=422)
+
+    async def __wait_for_client_disconnect(self, request: web.Request, request_metrics: RequestMetrics) -> NoReturn:
+        """Wait for client disconnect and mark request as canceled"""
+        await request.wait_for_disconnection()
+        log.debug(f"request with reqnum: {request_metrics.reqnum} was canceled")
+        self.metrics._request_canceled(request_metrics)
+        raise asyncio.CancelledError
+
+    async def __forward_request_to_backend(
+        self,
+        request: web.Request,
+        auth_data: AuthData,
+        payload: dict,
+        request_metrics: RequestMetrics,
+        target_path: Optional[str] = None,
+    ) -> web.Response:
+        """Forward request to backend and return response"""
+        try:
+            # Determine endpoint to use
+            endpoint = target_path if target_path else auth_data.endpoint
+
+            # Forward request to backend
+            response = await self.__call_api(
+                endpoint=endpoint,
+                method=request.method,
+                payload=payload
+            )
+
+            status_code = response.status
+            log.debug(
+                f"request with reqnum:{request_metrics.reqnum} "
+                f"returned status code: {status_code}"
+            )
+
+            # Pass through response
+            res = await self.__pass_through_response(request, response)
+            self.metrics._request_success(request_metrics)
+            return res
+        except Exception as e:
+            log.debug(f"[backend] Request error: {e}")
+            self.metrics._request_errored(request_metrics)
+            return web.Response(status=500)
+
     async def __handle_request(
         self,
         request: web.Request,
         target_path: Optional[str] = None,
     ) -> web.Response:
         """Forward requests to the model endpoint as-is"""
-        try:
-            data = await request.json()
-            auth_data, payload = self.__parse_request(data, request.path)
-        except JsonDataException as e:
-            return web.json_response(data=e.message, status=422)
-        except json.JSONDecodeError:
-            return web.json_response(dict(error="invalid JSON"), status=422)
+        # Parse and validate request
+        auth_data, payload, error_response = await self.__parse_and_validate_request(request)
+        if error_response:
+            return error_response
 
-        # Use cost from auth_data as workload (autoscaler calculates this)
+        # Create request metrics
         workload = float(auth_data.cost)
         request_metrics = RequestMetrics(
             request_idx=auth_data.request_idx,
@@ -125,41 +187,7 @@ class Backend:
             status="Created"
         )
 
-        async def cancel_api_call_if_disconnected() -> web.Response:
-            await request.wait_for_disconnection()
-            log.debug(f"request with reqnum: {request_metrics.reqnum} was canceled")
-            self.metrics._request_canceled(request_metrics)
-            raise asyncio.CancelledError
-
-        async def make_request() -> web.Response:
-            try:
-                # Determine endpoint to use
-                endpoint = target_path if target_path else auth_data.endpoint
-
-                # Forward request to backend
-                response = await self.__call_api(
-                    endpoint=endpoint,
-                    method=request.method,
-                    payload=payload
-                )
-
-                status_code = response.status
-                log.debug(
-                    f"request with reqnum:{request_metrics.reqnum} "
-                    f"returned status code: {status_code}"
-                )
-
-                # Pass through response
-                res = await self.__pass_through_response(request, response)
-                self.metrics._request_success(request_metrics)
-                return res
-            except requests.exceptions.RequestException as e:
-                log.debug(f"[backend] Request error: {e}")
-                self.metrics._request_errored(request_metrics)
-                return web.Response(status=500)
-
-        ###########
-
+        # Validate signature and queue
         if self.__check_signature(auth_data) is False:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=401)
@@ -168,30 +196,37 @@ class Backend:
             self.metrics._request_reject(request_metrics)
             return web.Response(status=429)
 
+        # Process request
         acquired = False
         try:
             self.metrics._request_start(request_metrics)
+
+            # Acquire semaphore if parallel requests not allowed
             if self.allow_parallel_requests is False:
                 log.debug(f"Waiting to acquire Sem for reqnum:{request_metrics.reqnum}")
                 await self.sem.acquire()
                 acquired = True
-                log.debug(
-                    f"Sem acquired for reqnum:{request_metrics.reqnum}, starting request..."
-                )
+                log.debug(f"Sem acquired for reqnum:{request_metrics.reqnum}, starting request...")
             else:
                 log.debug(f"Starting request for reqnum:{request_metrics.reqnum}")
 
+            # Race between making request and client disconnect
             done, pending = await wait(
                 [
-                    create_task(make_request()),
-                    create_task(cancel_api_call_if_disconnected()),
+                    create_task(self.__forward_request_to_backend(
+                        request, auth_data, payload, request_metrics, target_path
+                    )),
+                    create_task(self.__wait_for_client_disconnect(request, request_metrics)),
                 ],
                 return_when=FIRST_COMPLETED,
             )
+
+            # Cancel pending tasks
             for t in pending:
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 
+            # Return result from completed task
             done_task = done.pop()
             try:
                 return done_task.result()
@@ -267,20 +302,18 @@ class Backend:
         url = endpoint
         log.debug(f"{method} to endpoint: '{url}', payload: {payload}")
 
-        # Support all HTTP methods
-        if method == "GET":
-            return await self.session.get(url=url, params=payload if payload else None)
-        elif method == "POST":
-            return await self.session.post(url=url, json=payload)
-        elif method == "PUT":
-            return await self.session.put(url=url, json=payload)
-        elif method == "PATCH":
-            return await self.session.patch(url=url, json=payload)
-        elif method == "DELETE":
-            return await self.session.delete(url=url, json=payload)
-        else:
-            # Default to POST for unknown methods
-            return await self.session.post(url=url, json=payload)
+        # Map HTTP methods to session methods
+        method_handlers = {
+            "GET": lambda: self.session.get(url=url, params=payload if payload else None),
+            "POST": lambda: self.session.post(url=url, json=payload),
+            "PUT": lambda: self.session.put(url=url, json=payload),
+            "PATCH": lambda: self.session.patch(url=url, json=payload),
+            "DELETE": lambda: self.session.delete(url=url, json=payload),
+        }
+
+        # Get handler or default to POST
+        handler = method_handlers.get(method, method_handlers["POST"])
+        return await handler()
 
     async def __pass_through_response(
         self, client_request: web.Request, model_response: ClientResponse
@@ -335,11 +368,8 @@ class Backend:
     def healthcheck_session(self):
         """Dedicated session for healthchecks to avoid conflicts with API session"""
         log.debug("creating dedicated healthcheck session")
-        connector = TCPConnector(
-            force_close=True,
-            enable_cleanup_closed=True,
-        )
-        timeout = ClientTimeout(total=10)
+        connector = create_tcp_connector(force_close=True)
+        timeout = ClientTimeout(total=HEALTHCHECK_TIMEOUT)
         return ClientSession(timeout=timeout, connector=connector)
 
     async def __wait_for_backend_ready(self) -> None:
@@ -351,7 +381,6 @@ class Backend:
         log.info(f"Waiting for backend to be ready at {url} (timeout: {self.ready_timeout}s)")
 
         start_time = time.time()
-        retry_interval = 5  # Poll every 5 seconds
 
         while True:
             elapsed = time.time() - start_time
@@ -372,7 +401,7 @@ class Backend:
             except Exception as e:
                 log.debug(f"Backend not reachable yet: {e}, retrying...")
 
-            await sleep(retry_interval)
+            await sleep(HEALTHCHECK_RETRY_INTERVAL)
 
     async def __healthcheck(self):
         """Periodic healthcheck of the backend"""
@@ -381,7 +410,7 @@ class Backend:
             return
 
         while True:
-            await sleep(10)
+            await sleep(HEALTHCHECK_POLL_INTERVAL)
             if self.__start_healthcheck is False:
                 continue
             try:
@@ -426,7 +455,7 @@ class Backend:
                 self.__start_healthcheck = True
                 # Keep running to handle healthchecks
                 while True:
-                    await sleep(3600)
+                    await sleep(BENCHMARK_SLEEP_INTERVAL)
                 return
         except FileNotFoundError:
             pass
@@ -459,22 +488,23 @@ class Backend:
 
         # Keep running
         while True:
-            await sleep(3600)
+            await sleep(BENCHMARK_SLEEP_INTERVAL)
+
+    def __verify_signature(self, message: str, signature: str) -> bool:
+        """Verify PKCS#1 signature"""
+        try:
+            key = RSA.import_key(self.pubkey)
+            h = SHA256.new(message.encode())
+            pkcs1_15.new(key).verify(h, base64.b64decode(signature))
+            return True
+        except Exception as e:
+            log.debug(f"Signature verification failed: {e}")
+            return False
 
     def __check_signature(self, auth_data: AuthData) -> bool:
         """Verify request signature from autoscaler"""
         if self.unsecured is True:
             return True
-
-        def verify_signature(message, signature):
-            try:
-                key = RSA.import_key(self.pubkey)
-                h = SHA256.new(message.encode())
-                pkcs1_15.new(key).verify(h, base64.b64decode(signature))
-                return True
-            except Exception as e:
-                log.debug(f"Signature verification failed: {e}")
-                return False
 
         auth_data_dict = {
             "cost": auth_data.cost,
@@ -485,18 +515,24 @@ class Backend:
         }
 
         message = json.dumps(auth_data_dict, sort_keys=True)
-        return verify_signature(message, auth_data.signature)
+        return self.__verify_signature(message, auth_data.signature)
 
     def _fetch_pubkey(self) -> Optional[RSA.RsaKey]:
-        """Fetch public key from autoscaler"""
+        """
+        Fetch public key from autoscaler synchronously.
+
+        Note: This is called during __post_init__ (sync context) so we can't use async.
+        Consider refactoring to fetch async during startup instead.
+        """
         if self.unsecured:
             log.debug("Running in unsecured mode, skipping pubkey fetch")
             return None
 
         try:
+            import requests
             response = requests.get(
                 f"{self.report_addr}/pubkey",
-                timeout=10
+                timeout=PUBKEY_FETCH_TIMEOUT
             )
             response.raise_for_status()
             pubkey_str = response.text

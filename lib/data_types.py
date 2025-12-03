@@ -2,7 +2,7 @@ import time
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional, Set, Union
 import inspect
 
 import psutil

@@ -52,7 +52,7 @@ def start_server(backend: Backend, routes: List[web.RouteDef], **kwargs):
             try:
                 while True:
                     metrics._model_errored(err_msg)
-                    await metrics._Metrics__send_metrics_and_reset()
+                    await metrics._send_metrics_and_reset()
                     await asyncio.sleep(10)
             finally:
                 await metrics.aclose()
