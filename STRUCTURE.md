@@ -35,7 +35,7 @@ vespa/
 │
 ├── README.md                   # Main documentation
 ├── MIGRATION.md                # Migration guide from old architecture
-├── BENCHMARKS.md               # Benchmark writing guide
+├── VESPA_BENCHMARKS.md               # Benchmark writing guide
 └── STRUCTURE.md                # This file
 ```
 
@@ -52,8 +52,8 @@ The worker entry point. Loads configuration from environment variables and start
 
 **Usage:**
 ```bash
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 python server.py
 ```
 
@@ -260,14 +260,14 @@ pyworker/
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `BACKEND_URL` | Backend API URL | `http://localhost:8000` |
-| `BENCHMARK` | Benchmark module path | `benchmarks.openai:benchmark` |
+| `VESPA_BACKEND_URL` | Backend API URL | `http://localhost:8000` |
+| `VESPA_BENCHMARK` | Benchmark module path | `benchmarks.openai:benchmark` |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HEALTHCHECK_ENDPOINT` | `None` | Health check path |
+| `VESPA_HEALTHCHECK_ENDPOINT` | `None` | Health check path |
 | `ALLOW_PARALLEL` | `true` | Allow concurrent requests |
 | `MAX_WAIT_TIME` | `10.0` | Max queue time (seconds) |
 | `WORKER_PORT` | `3000` | Port to listen on |
@@ -333,8 +333,8 @@ pyworker/
 pip install -r requirements.txt
 
 # Set environment
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"
 
 # Run

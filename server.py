@@ -5,11 +5,11 @@ This server proxies requests to any backend API without custom transformation.
 It handles authentication, metrics tracking, and benchmarking.
 
 Environment variables:
-- BACKEND_URL: URL of the backend server (e.g., http://localhost:8000)
-- BENCHMARK: Python module path with benchmark function (e.g., benchmarks.openai:benchmark)
-- HEALTHCHECK_ENDPOINT: Optional healthcheck endpoint (e.g., /health)
-- ALLOW_PARALLEL: Whether to allow parallel requests (default: true)
-- MAX_WAIT_TIME: Maximum queue wait time before rejecting (default: 10.0)
+- VESPA_BACKEND_URL: URL of the backend server (e.g., http://localhost:8000)
+- VESPA_BENCHMARK: Python module path with benchmark function (e.g., benchmarks.openai:benchmark)
+- VESPA_HEALTHCHECK_ENDPOINT: Optional healthcheck endpoint (e.g., /health)
+- VESPA_ALLOW_PARALLEL: Whether to allow parallel requests (default: true)
+- VESPA_MAX_WAIT_TIME: Maximum queue wait time before rejecting (default: 10.0)
 
 Usage:
     python server.py
@@ -23,7 +23,7 @@ from lib.backend import Backend
 from lib.server import start_server
 
 # Configure logging from environment variable
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = os.environ.get("VESPA_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s[%(levelname)-5s] %(message)s",
@@ -44,16 +44,16 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
             # Run benchmark and return max_throughput in workload units per second
             return max_throughput
     """
-    benchmark_spec = os.environ.get("BENCHMARK")
+    benchmark_spec = os.environ.get("VESPA_BENCHMARK")
 
     if not benchmark_spec:
-        log.warning("No BENCHMARK env var set, will use default throughput of 1.0")
+        log.warning("No VESPA_BENCHMARK env var set, will use default throughput of 1.0")
         return None
 
     try:
         # Parse module:function
         if ":" not in benchmark_spec:
-            raise ValueError(f"BENCHMARK must be in format 'module:function', got: {benchmark_spec}")
+            raise ValueError(f"VESPA_BENCHMARK must be in format 'module:function', got: {benchmark_spec}")
 
         module_path, function_name = benchmark_spec.rsplit(":", 1)
 
@@ -74,10 +74,10 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
 
 
 # Load configuration from environment
-backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
-healthcheck_endpoint = os.environ.get("HEALTHCHECK_ENDPOINT")
-allow_parallel = os.environ.get("ALLOW_PARALLEL", "true").lower() == "true"
-max_wait_time = float(os.environ.get("MAX_WAIT_TIME", "10.0"))
+backend_url = os.environ.get("VESPA_BACKEND_URL", "http://localhost:8000")
+healthcheck_endpoint = os.environ.get("VESPA_HEALTHCHECK_ENDPOINT")
+allow_parallel = os.environ.get("VESPA_ALLOW_PARALLEL", "true").lower() == "true"
+max_wait_time = float(os.environ.get("VESPA_MAX_WAIT_TIME", "10.0"))
 
 # Load benchmark function
 benchmark_func = load_benchmark_function()
@@ -117,6 +117,6 @@ if __name__ == "__main__":
     log.info(f"Healthcheck endpoint: {healthcheck_endpoint or 'None'}")
     log.info(f"Allow parallel requests: {allow_parallel}")
     log.info(f"Max wait time: {max_wait_time}s")
-    log.info(f"Benchmark: {os.environ.get('BENCHMARK', 'None (will use default)')}")
+    log.info(f"Benchmark: {os.environ.get('VESPA_BENCHMARK', 'None (will use default)')}")
 
     start_server(backend, routes)

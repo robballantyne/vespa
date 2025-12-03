@@ -48,7 +48,7 @@ pyworker/
 # Total: ~250 lines of custom code
 
 export BACKEND="openai"
-export BACKEND_URL="http://localhost:8000"
+export VESPA_BACKEND_URL="http://localhost:8000"
 export MODEL_LOG="/path/to/model.log"
 export HF_TOKEN="..."
 ```
@@ -58,8 +58,8 @@ export HF_TOKEN="..."
 # No custom worker needed!
 # Just 2 environment variables
 
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"  # Optional
 ```
 
@@ -67,7 +67,7 @@ export MODEL_NAME="meta-llama/Llama-2-7b-hf"  # Optional
 - ❌ No more `BACKEND` variable needed (defaults to `generic`)
 - ❌ No more `MODEL_LOG` required (no log tailing)
 - ❌ No more custom worker code
-- ✅ Simple `BENCHMARK` variable points to benchmark function
+- ✅ Simple `VESPA_BENCHMARK` variable points to benchmark function
 - ✅ Still works with vLLM, Ollama, TGI (OpenAI mode), llama.cpp
 
 ---
@@ -81,7 +81,7 @@ export MODEL_NAME="meta-llama/Llama-2-7b-hf"  # Optional
 # Total: ~200 lines of custom code
 
 export BACKEND="tgi"
-export BACKEND_URL="http://localhost:8080"
+export VESPA_BACKEND_URL="http://localhost:8080"
 export MODEL_LOG="/path/to/model.log"
 export HF_TOKEN="..."
 ```
@@ -90,8 +90,8 @@ export HF_TOKEN="..."
 ```bash
 # No custom worker needed!
 
-export BACKEND_URL="http://localhost:8080"
-export BENCHMARK="benchmarks.tgi:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8080"
+export VESPA_BENCHMARK="benchmarks.tgi:benchmark"
 ```
 
 **What Changed:**
@@ -111,7 +111,7 @@ export BENCHMARK="benchmarks.tgi:benchmark"
 # Total: ~400 lines of custom code
 
 export BACKEND="comfyui"
-export BACKEND_URL="http://localhost:8188"
+export VESPA_BACKEND_URL="http://localhost:8188"
 export MODEL_LOG="/path/to/comfyui.log"
 export COMFY_MODEL="model.safetensors"
 ```
@@ -120,8 +120,8 @@ export COMFY_MODEL="model.safetensors"
 ```bash
 # No custom worker needed!
 
-export BACKEND_URL="http://localhost:8188"
-export BENCHMARK="benchmarks.comfyui:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8188"
+export VESPA_BENCHMARK="benchmarks.comfyui:benchmark"
 export ALLOW_PARALLEL="false"  # ComfyUI doesn't handle concurrency well
 ```
 
@@ -276,14 +276,14 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
 |-----|-----|-------|
 | `BACKEND` | - | Defaults to `generic`, no longer needed |
 | `MODEL_LOG` | - | No log tailing, no longer needed |
-| - | `BACKEND_URL` | Still required (was required before too) |
-| - | `BENCHMARK` | New: points to benchmark function |
+| - | `VESPA_BACKEND_URL` | Still required (was required before too) |
+| - | `VESPA_BENCHMARK` | New: points to benchmark function |
 
 ### Optional (New)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HEALTHCHECK_ENDPOINT` | None | Health check path (e.g., `/health`) |
+| `VESPA_HEALTHCHECK_ENDPOINT` | None | Health check path (e.g., `/health`) |
 | `ALLOW_PARALLEL` | `true` | Set to `false` for ComfyUI |
 | `MAX_WAIT_TIME` | `10.0` | Queue timeout in seconds |
 
@@ -330,8 +330,8 @@ env | grep -E "BACKEND|MODEL_|COMFY_|HF_" > old_config.env
 unset BACKEND MODEL_LOG COMFY_MODEL
 
 # Set new variables
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 ```
 
 ### 3. Test Locally
@@ -374,8 +374,8 @@ Look for:
 
 Update your Vast.ai template with new environment variables:
 ```bash
-BACKEND_URL=http://localhost:8000
-BENCHMARK=benchmarks.openai:benchmark
+VESPA_BACKEND_URL=http://localhost:8000
+VESPA_BENCHMARK=benchmarks.openai:benchmark
 ```
 
 ---
@@ -431,7 +431,7 @@ async def benchmark(backend_url, session):
 EOF
 
 # Use it
-export BENCHMARK="benchmarks.myapi:benchmark"
+export VESPA_BENCHMARK="benchmarks.myapi:benchmark"
 ```
 
 ### Q: What happened to workload calculation?

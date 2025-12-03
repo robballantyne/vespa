@@ -69,10 +69,10 @@ server.py                  # Entry point, loads config and benchmark
   4. Start accepting requests
 
 - **Request lifecycle**:
-  1. Parse `auth_data` and `payload` from request body (passthrough mode: if `UNSECURED=true` and no auth_data, treat entire body as payload)
-  2. Validate signature (unless `UNSECURED=true`)
-  3. Check queue wait time < `MAX_WAIT_TIME`
-  4. Acquire semaphore if `ALLOW_PARALLEL=false`
+  1. Parse `auth_data` and `payload` from request body (passthrough mode: if `VESPA_UNSECURED=true` and no auth_data, treat entire body as payload)
+  2. Validate signature (unless `VESPA_UNSECURED=true`)
+  3. Check queue wait time < `VESPA_MAX_WAIT_TIME`
+  4. Acquire semaphore if `VESPA_ALLOW_PARALLEL=false`
   5. Forward request to backend
   6. Stream/pass response back to client
   7. Update metrics
@@ -137,7 +137,7 @@ server.py                  # Entry point, loads config and benchmark
 **Primary responsibility**: aiohttp server setup and error handling.
 
 **Key features**:
-- SSL support via `USE_SSL` env var
+- SSL support via `VESPA_USE_SSL` env var
 - Concurrent execution of web server and background tasks (`_start_tracking()`)
 - Beacon mode on failure: continuously reports errors to autoscaler
 
@@ -158,26 +158,57 @@ gather(
 
 ## Environment Variables
 
-### Required
-- `BACKEND_URL`: Backend API base URL (e.g., `http://localhost:8000`)
+### Required Variables
+- `VESPA_BACKEND_URL`: Backend API base URL (e.g., `http://localhost:8000`)
+- `VESPA_WORKER_PORT`: Port to listen on (required when running directly; `start_server.sh` sets default `3000`)
 
-### Optional (Application)
-- `LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL (default: `INFO`)
-- `BENCHMARK`: Python module path to benchmark function (e.g., `benchmarks.openai:benchmark`)
-- `HEALTHCHECK_ENDPOINT`: Health check path (defaults to `/health` if not set)
-- `READY_TIMEOUT`: Seconds to wait for backend ready (default: `1200`)
-- `ALLOW_PARALLEL`: Allow concurrent requests (default: `true`)
-- `MAX_WAIT_TIME`: Max queue wait time in seconds (default: `10.0`)
-- `WORKER_PORT`: Port to listen on (default: `3000`)
-- `UNSECURED`: Disable signature verification for local dev (default: `false`)
-- `USE_SSL`: Enable SSL/TLS (default: `false`)
+### Core Configuration
+- `VESPA_BENCHMARK`: Python module path to benchmark (e.g., `benchmarks.openai:benchmark`) - defaults to 1.0 workload/sec
+- `VESPA_HEALTHCHECK_ENDPOINT`: Health check path (optional; falls back to `/health`)
+- `VESPA_ALLOW_PARALLEL`: Allow concurrent requests (default: `true`)
+- `VESPA_MAX_WAIT_TIME`: Max queue wait time in seconds (default: `10.0`)
+- `VESPA_READY_TIMEOUT`: Seconds to wait for backend ready (default: `1200`)
+- `VESPA_UNSECURED`: Disable signature verification (default: `false`, **local dev only**)
+- `VESPA_USE_SSL`: Enable SSL/TLS (default: `false`)
+- `VESPA_LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL (default: `INFO`)
 
-### Set by Vast.ai
+### Advanced Tunables
+
+**Connection Pooling:**
+- `VESPA_CONNECTION_LIMIT`: Max total connections to backend (default: `100`)
+- `VESPA_CONNECTION_LIMIT_PER_HOST`: Max connections per backend host (default: `20`)
+- `VESPA_METRICS_CONNECTION_LIMIT`: Max total connections for metrics (default: `8`)
+- `VESPA_METRICS_CONNECTION_LIMIT_PER_HOST`: Max connections per metrics host (default: `4`)
+
+**Healthcheck:**
+- `VESPA_HEALTHCHECK_RETRY_INTERVAL`: Seconds between healthcheck retries during startup (default: `5`)
+- `VESPA_HEALTHCHECK_POLL_INTERVAL`: Seconds between periodic healthchecks (default: `10`)
+- `VESPA_HEALTHCHECK_TIMEOUT`: Timeout for healthcheck requests in seconds (default: `10`)
+
+**Metrics:**
+- `VESPA_METRICS_UPDATE_INTERVAL`: Seconds between metrics updates to autoscaler (default: `1`)
+- `VESPA_DELETE_REQUESTS_INTERVAL`: Seconds between delete request cleanup (default: `1`)
+- `VESPA_METRICS_RETRY_DELAY`: Seconds between retry attempts (default: `2`)
+- `VESPA_METRICS_MAX_RETRIES`: Max retry attempts for metrics reporting (default: `3`)
+- `VESPA_METRICS_TIMEOUT`: Timeout for metrics HTTP requests in seconds (default: `10`)
+
+**Security:**
+- `VESPA_PUBKEY_TIMEOUT`: Timeout for fetching public key in seconds (default: `10`)
+- `VESPA_PUBKEY_MAX_RETRIES`: Max attempts before falling back to unsecured mode (default: `3`)
+
+**Other:**
+- `VESPA_BENCHMARK_CACHE_FILE`: File path to cache benchmark results (default: `.has_benchmark`)
+
+### Set by Vast.ai Platform
 - `MASTER_TOKEN`: Authentication token for autoscaler
 - `REPORT_ADDR`: Autoscaler URL for metrics reporting (comma-separated)
 - `CONTAINER_ID`: Unique worker instance ID
 - `PUBLIC_IPADDR`: Public IP address
 - `VAST_TCP_PORT_{port}`: Mapped public port
+
+### Backend-Specific (Not Vespa Config)
+- `MODEL_NAME`: Used by vLLM, Ollama, TGI for model name in API requests
+- `HF_TOKEN`: HuggingFace authentication token (used by model servers)
 
 ## Important Patterns and Conventions
 
@@ -193,8 +224,8 @@ await self.benchmark_func(...)          # Then benchmark
 
 **Behavior**:
 - Polls healthcheck endpoint every 5 seconds
-- Uses `HEALTHCHECK_ENDPOINT` if set, otherwise defaults to `/health`
-- Fails worker if no response within `READY_TIMEOUT`
+- Uses `VESPA_HEALTHCHECK_ENDPOINT` if set, otherwise defaults to `/health`
+- Fails worker if no response within `VESPA_READY_TIMEOUT`
 - Marks backend as errored and reports to autoscaler
 
 ### 2. Shared Session Safety
@@ -304,7 +335,7 @@ def backend_errored(self, msg: str):
        # Your benchmark logic
        return max_throughput
    ```
-3. Set `BENCHMARK=benchmarks.my_api:benchmark`
+3. Set `VESPA_BENCHMARK=benchmarks.my_api:benchmark`
 4. Ensure benchmark workload units match what autoscaler sends in `auth_data.cost`
 
 ### Supporting a New HTTP Method
@@ -340,7 +371,7 @@ connector = TCPConnector(
 
 ### 2. **Healthcheck Endpoint is Critical**
 - Without it, startup uses fixed 10s delay (unreliable)
-- Always provide `HEALTHCHECK_ENDPOINT` or ensure `/health` exists
+- Always provide `VESPA_HEALTHCHECK_ENDPOINT` or ensure `/health` exists
 
 ### 3. **Benchmark Units Must Match Workload**
 - If benchmark returns tokens/sec, autoscaler must send tokens in `auth_data.cost`
@@ -354,7 +385,7 @@ connector = TCPConnector(
 ### 5. **Signature Verification Requires Public Key**
 - Fetched from `REPORT_ADDR/pubkey` on startup
 - Falls back to unsecured mode after 3 failed attempts
-- Use `UNSECURED=true` for local development only
+- Use `VESPA_UNSECURED=true` for local development only
 
 ### 6. **Streaming Responses Must Not Be Buffered**
 - Use `iter_any()` to stream chunks immediately
@@ -373,15 +404,15 @@ connector = TCPConnector(
 
 ### Without Autoscaler
 ```bash
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
-export UNSECURED="true"  # Skip signature verification
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_UNSECURED="true"  # Skip signature verification
 python server.py
 ```
 
 ### Test Request (Passthrough Mode - RECOMMENDED)
 
-When `UNSECURED=true`, you can send requests directly without wrapping in auth_data:
+When `VESPA_UNSECURED=true`, you can send requests directly without wrapping in auth_data:
 
 ```bash
 # Simple passthrough - just like calling your backend directly
@@ -444,7 +475,7 @@ vespa/
 │   └── use_module.py      # Example: using as module
 ├── README.md              # User documentation
 ├── CLIENT.md              # Client usage docs
-├── BENCHMARKS.md          # Benchmark writing guide
+├── VESPA_BENCHMARKS.md          # Benchmark writing guide
 ├── MIGRATION.md           # Migration from old architecture
 ├── STRUCTURE.md           # Detailed structure docs
 ├── CLAUDE.md              # This file - context for AI assistants
@@ -452,6 +483,43 @@ vespa/
 ```
 
 ## Recent Changes Log
+
+### 2025-12-03: Prefixed All Environment Variables with VESPA_ and Added Configurability
+- **Environment Variable Naming**: All environment variables now use `VESPA_` prefix for clarity and namespace isolation
+  - `BACKEND_URL` → `VESPA_BACKEND_URL`
+  - `BENCHMARK` → `VESPA_BENCHMARK`
+  - `HEALTHCHECK_ENDPOINT` → `VESPA_HEALTHCHECK_ENDPOINT`
+  - `READY_TIMEOUT` → `VESPA_READY_TIMEOUT`
+  - `ALLOW_PARALLEL` → `VESPA_ALLOW_PARALLEL`
+  - `MAX_WAIT_TIME` → `VESPA_MAX_WAIT_TIME`
+  - `WORKER_PORT` → `VESPA_WORKER_PORT`
+  - `UNSECURED` → `VESPA_UNSECURED`
+  - `USE_SSL` → `VESPA_USE_SSL`
+  - `LOG_LEVEL` → `VESPA_LOG_LEVEL`
+- **Made hardcoded constants configurable**: Added environment variable support for all configuration constants
+  - `VESPA_BENCHMARK_CACHE_FILE` (default: ".has_benchmark")
+  - `VESPA_PUBKEY_MAX_RETRIES` (default: 3)
+  - `VESPA_HEALTHCHECK_RETRY_INTERVAL` (default: 5)
+  - `VESPA_HEALTHCHECK_POLL_INTERVAL` (default: 10)
+  - `VESPA_HEALTHCHECK_TIMEOUT` (default: 10)
+  - `VESPA_PUBKEY_TIMEOUT` (default: 10)
+  - `VESPA_METRICS_RETRY_DELAY` (default: 2)
+  - `VESPA_METRICS_UPDATE_INTERVAL` (default: 1)
+  - `VESPA_DELETE_REQUESTS_INTERVAL` (default: 1)
+  - `VESPA_METRICS_MAX_RETRIES` (default: 3)
+  - `VESPA_METRICS_TIMEOUT` (default: 10)
+  - `VESPA_CONNECTION_LIMIT` (default: 100)
+  - `VESPA_CONNECTION_LIMIT_PER_HOST` (default: 20)
+  - `VESPA_METRICS_CONNECTION_LIMIT` (default: 8)
+  - `VESPA_METRICS_CONNECTION_LIMIT_PER_HOST` (default: 4)
+- **Updated all documentation**: README.md, CLAUDE.md, BENCHMARKS.md, STRUCTURE.md, MIGRATION.md, and start_server.sh all now use new naming
+- **Variables NOT prefixed**:
+  - Vast.ai-provided: `MASTER_TOKEN`, `REPORT_ADDR`, `CONTAINER_ID`, `PUBLIC_IPADDR`, `VAST_TCP_PORT_*` (set by platform)
+  - Backend-specific: `MODEL_NAME`, `HF_TOKEN` (used by backend servers, not Vespa configuration)
+
+**Rationale**: The `VESPA_` prefix provides clear namespace separation, preventing conflicts with user environment variables or other tools. Making all constants configurable allows for advanced tuning without code changes.
+
+**Impact**: This is a breaking change for existing deployments. Users must update all environment variable names. All functionality remains identical.
 
 ### 2025-12-03: Refactored Load Testing to Use Benchmark Modules
 - **Added `get_test_request()` function to all benchmarks**: Each benchmark now exports a helper function for load testing
@@ -463,7 +531,7 @@ vespa/
   - Calls `get_test_request()` from benchmark to get test payloads
   - Removed broken `ApiPayload` import (class was removed in earlier refactoring)
   - Simplified from 311 lines to 329 lines (cleaner, more focused)
-- **Updated BENCHMARKS.md**: Added comprehensive load testing documentation
+- **Updated VESPA_BENCHMARKS.md**: Added comprehensive load testing documentation
   - New "Load Testing with Benchmarks" section with examples
   - Updated "Writing Custom Benchmarks" to include `get_test_request()` pattern
 
@@ -484,33 +552,33 @@ python -m lib.test_utils -k KEY -e endpoint -b benchmarks.openai -n 100 -rps 10
 ```
 
 ### 2025-12-03: Renamed model_server_url to backend_url for Generic Naming
-- **Renamed environment variable**: `MODEL_SERVER_URL` → `BACKEND_URL` throughout codebase
+- **Renamed environment variable**: `MODEL_SERVER_URL` → `VESPA_BACKEND_URL` throughout codebase
 - **Renamed field**: `model_server_url` → `backend_url` in `lib/backend.py:59`
 - **Renamed parameter**: `model_url` → `backend_url` in benchmark function signatures
   - `benchmarks/openai.py:31`
   - `benchmarks/tgi.py:38`
   - `benchmarks/comfyui.py:65`
-- **Updated documentation**: All references updated in README.md, BENCHMARKS.md, STRUCTURE.md, MIGRATION.md, and CLAUDE.md
-- **Updated scripts**: `start_server.sh` validation and logging now uses `BACKEND_URL`
+- **Updated documentation**: All references updated in README.md, VESPA_BENCHMARKS.md, STRUCTURE.md, MIGRATION.md, and CLAUDE.md
+- **Updated scripts**: `start_server.sh` validation and logging now uses `VESPA_BACKEND_URL`
 
 **Rationale**: The term "model server" implies AI models, but Vespa is designed as a universal proxy for any HTTP API backend. The new naming better reflects this generic purpose and avoids confusion when proxying non-AI services.
 
-**Impact**: This is a breaking change for existing deployments. Users must update their environment variables from `MODEL_SERVER_URL` to `BACKEND_URL`. All functionality remains identical.
+**Impact**: This is a breaking change for existing deployments. Users must update their environment variables from `MODEL_SERVER_URL` to `VESPA_BACKEND_URL`. All functionality remains identical.
 
-### 2025-12-03: Fixed MAX_WAIT_TIME Configuration and Benchmark Startup Pattern
-- **Made MAX_WAIT_TIME configurable**: Changed `max_wait_time` field in `lib/backend.py:64-66` to read from environment variable (was previously hardcoded to 10.0)
+### 2025-12-03: Fixed VESPA_MAX_WAIT_TIME Configuration and Benchmark Startup Pattern
+- **Made VESPA_MAX_WAIT_TIME configurable**: Changed `max_wait_time` field in `lib/backend.py:64-66` to read from environment variable (was previously hardcoded to 10.0)
 - **Fixed benchmark startup pattern**: Removed unnecessary infinite sleep loop from `__run_benchmark_on_startup()` (`lib/backend.py:448-486`)
   - Benchmark now completes and exits cleanly instead of sleeping forever
-  - Removed unused `BENCHMARK_SLEEP_INTERVAL` constant
+  - Removed unused `VESPA_BENCHMARK_SLEEP_INTERVAL` constant
 - **Refactored `_start_tracking()`**: Changed from running benchmark in `gather()` with background tasks to sequential execution (`lib/backend.py:435-445`)
   - Now runs benchmark first to completion
   - Then starts infinite background loops (metrics, healthcheck, delete requests)
   - More logical flow: wait for backend ready → benchmark → start monitoring
 
-**Impact**: Cleaner startup pattern that doesn't waste a coroutine sleeping indefinitely. MAX_WAIT_TIME now properly configurable as documented.
+**Impact**: Cleaner startup pattern that doesn't waste a coroutine sleeping indefinitely. VESPA_MAX_WAIT_TIME now properly configurable as documented.
 
 ### 2025-12-03: Major Code Refactoring and Simplification
-- **Logging Configuration**: Added `LOG_LEVEL` environment variable support (default: INFO) in `server.py:26-31`
+- **Logging Configuration**: Added `VESPA_LOG_LEVEL` environment variable support (default: INFO) in `server.py:26-31`
 - **Removed Deprecated Code**: Removed `distutils.util.strtobool` (deprecated), replaced with simple string comparison
 - **Fixed Missing Import**: Added `Union` type import to `lib/data_types.py:5`
 - **Extracted Magic Numbers**: Created constants at top of files for all magic numbers:
@@ -534,7 +602,7 @@ python -m lib.test_utils -k KEY -e endpoint -b benchmarks.openai -n 100 -rps 10
 
 ### 2025-12-02: Passthrough Mode for Local Development
 - Modified `__parse_request()` method in `lib/backend.py` (lines 213-261) to support passthrough mode
-- When `UNSECURED=true`, requests can now be sent in two formats:
+- When `VESPA_UNSECURED=true`, requests can now be sent in two formats:
   1. **Passthrough (new)**: Send payload directly without auth_data wrapper (recommended for local testing)
   2. **Production format**: Include both auth_data and payload (for testing production flow)
 - Passthrough mode automatically creates minimal AuthData for metrics tracking
@@ -543,11 +611,11 @@ python -m lib.test_utils -k KEY -e endpoint -b benchmarks.openai -n 100 -rps 10
 
 ### 2024-12-02: Health-Check-Based Startup
 - Added `__wait_for_backend_ready()` method to poll healthcheck until ready
-- Added `READY_TIMEOUT` environment variable (default: 1200s)
+- Added `VESPA_READY_TIMEOUT` environment variable (default: 1200s)
 - Changed default healthcheck endpoint to `/health` if not specified
 - Replaced hardcoded `sleep(5)` with proper health polling in benchmark startup
 - Worker now fails gracefully if backend doesn't become ready within timeout
-- Updated README.md to document new `READY_TIMEOUT` parameter
+- Updated README.md to document new `VESPA_READY_TIMEOUT` parameter
 
 ### Previous Architecture
 - Originally had custom workers per API type (openai/, tgi/, comfyui/)

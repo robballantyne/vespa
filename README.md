@@ -1,244 +1,242 @@
-# Vespa - Simplified Serverless Proxy for Vast.ai
+# Vespa - Universal Serverless Proxy for Vast.ai
 
-Vespa is a lightweight, generic proxy that enables serverless compute on Vast.ai for **any** API backend without writing custom code.
+Vespa is a lightweight HTTP proxy that enables serverless compute on Vast.ai for **any** backend API without custom code.
 
-## Key Features
+## Features
 
-- ✅ **Zero boilerplate** - Proxy any API without writing handlers
-- ✅ **Universal compatibility** - Works with OpenAI, TGI, vLLM, Ollama, ComfyUI, or any HTTP API
-- ✅ **Simple benchmarking** - One Python function to define performance
-- ✅ **Full metrics** - Automatic tracking and autoscaler integration
-- ✅ **All HTTP methods** - GET, POST, PUT, PATCH, DELETE
-- ✅ **Streaming support** - Automatic detection and pass-through
-
-## For Users: Simple Client
-
-If you just want to **use** a Vast.ai endpoint (not run a worker), use the client:
-
-```bash
-# Start local proxy
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
-
-# Point your app at localhost:8010
-import requests
-response = requests.post("http://localhost:8010/v1/completions", json={...})
-```
-
-The client handles all Vast.ai routing automatically! See [CLIENT.md](CLIENT.md) for details.
+- **Universal** - Works with any HTTP API (OpenAI, vLLM, TGI, Ollama, ComfyUI, custom APIs)
+- **Zero boilerplate** - No custom handlers, transformations, or payload classes
+- **All HTTP methods** - GET, POST, PUT, PATCH, DELETE
+- **Streaming** - Automatic detection and pass-through
+- **Metrics** - Automatic tracking and autoscaler integration
+- **Simple benchmarking** - One async function defines performance
 
 ---
 
-## For Developers: Running a Worker
+## Quick Start
 
-### 1. Set Environment Variables
-
-```bash
-# Required
-export BACKEND_URL="http://localhost:8000"  # Your backend API
-export BENCHMARK="benchmarks.openai:benchmark"   # Benchmark function
-
-# Optional
-export HEALTHCHECK_ENDPOINT="/health"            # Health check path
-export ALLOW_PARALLEL="true"                     # Allow concurrent requests
-export MAX_WAIT_TIME="10.0"                      # Max queue time (seconds)
-```
-
-### 2. Run PyWorker
+### Running on Vast.ai
 
 ```bash
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 ./start_server.sh
 ```
 
-That's it! Vespa will:
-1. Start proxying requests to your backend
-2. Run the benchmark to measure throughput
-3. Report metrics to the Vast.ai autoscaler
+### Running Locally
 
-## How It Works
-
-### Request Flow
-
-```
-Client → Vast.ai Autoscaler → PyWorker → Your Backend API
-                ↓                ↓
-         (calculates workload)  (tracks metrics)
+```bash
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_WORKER_PORT="3000"
+export VESPA_UNSECURED="true"
+python server.py
 ```
 
-1. **Client** sends request to Vast.ai
-2. **Autoscaler** calculates workload and routes to worker
-3. **PyWorker** validates signature and forwards request
-4. **Backend** processes request
-5. **PyWorker** streams response back to client
+Test it:
+```bash
+curl -X POST http://localhost:3000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "my-model", "prompt": "Hello", "max_tokens": 100}'
+```
 
-### No Custom Code Required!
+---
 
-Unlike the old architecture, you **don't need** to:
-- ❌ Create a custom worker directory
-- ❌ Define `ApiPayload` classes
-- ❌ Define `EndpointHandler` classes
-- ❌ Implement `generate_payload_json()`
-- ❌ Implement `generate_client_response()`
-- ❌ Calculate workload (autoscaler does this)
-- ❌ Transform requests or responses
+## Configuration
+
+### Required Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `VESPA_BACKEND_URL` | Backend API base URL | `http://localhost:8000` |
+| `VESPA_WORKER_PORT` | Port for Vespa to listen on | `3000` |
+
+**Note:** On Vast.ai, `VESPA_WORKER_PORT` has a default of `3000` set by `start_server.sh`.
+
+### Core Options
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_BENCHMARK` | None | Python module path to benchmark function<br/>Format: `module.path:function_name`<br/>Example: `benchmarks.openai:benchmark`<br/>If not provided, uses default throughput of 1.0 |
+| `VESPA_HEALTHCHECK_ENDPOINT` | None | Health check path (e.g., `/health`)<br/>Falls back to `/health` if not set |
+| `VESPA_ALLOW_PARALLEL` | `true` | Allow concurrent request processing |
+| `VESPA_MAX_WAIT_TIME` | `10.0` | Max queue wait time (seconds) before rejecting (HTTP 429) |
+| `VESPA_READY_TIMEOUT` | `1200` | Max seconds to wait for backend ready (20 minutes) |
+| `VESPA_UNSECURED` | `false` | Disable signature verification (**local dev only**) |
+| `VESPA_USE_SSL` | `false` | Enable SSL/TLS |
+| `VESPA_LOG_LEVEL` | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL |
+
+### Advanced Tunables
+
+**Connection Pooling:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_CONNECTION_LIMIT` | `100` | Max total connections to backend |
+| `VESPA_CONNECTION_LIMIT_PER_HOST` | `20` | Max connections per backend host |
+| `VESPA_METRICS_CONNECTION_LIMIT` | `8` | Max total connections for metrics |
+| `VESPA_METRICS_CONNECTION_LIMIT_PER_HOST` | `4` | Max connections per metrics host |
+
+**Healthcheck Tuning:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_HEALTHCHECK_RETRY_INTERVAL` | `5` | Seconds between healthcheck retries during startup |
+| `VESPA_HEALTHCHECK_POLL_INTERVAL` | `10` | Seconds between periodic healthchecks |
+| `VESPA_HEALTHCHECK_TIMEOUT` | `10` | Timeout (seconds) for healthcheck requests |
+
+**Metrics & Reporting:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_METRICS_UPDATE_INTERVAL` | `1` | Seconds between metrics updates to autoscaler |
+| `VESPA_DELETE_REQUESTS_INTERVAL` | `1` | Seconds between delete request cleanup |
+| `VESPA_METRICS_RETRY_DELAY` | `2` | Seconds between retry attempts |
+| `VESPA_METRICS_MAX_RETRIES` | `3` | Max retry attempts for metrics reporting |
+| `VESPA_METRICS_TIMEOUT` | `10` | Timeout (seconds) for metrics HTTP requests |
+
+**Security:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_PUBKEY_TIMEOUT` | `10` | Timeout (seconds) for fetching public key |
+| `VESPA_PUBKEY_MAX_RETRIES` | `3` | Max attempts before falling back to unsecured mode |
+
+**Other:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_BENCHMARK_CACHE_FILE` | `.has_benchmark` | File path to cache benchmark results |
+
+### Vast.ai Variables (Set by Platform)
+
+These are automatically set by Vast.ai:
+
+| Variable | Description |
+|----------|-------------|
+| `MASTER_TOKEN` | Authentication token for autoscaler |
+| `REPORT_ADDR` | Autoscaler URL for metrics reporting (comma-separated) |
+| `CONTAINER_ID` | Unique worker instance ID |
+| `PUBLIC_IPADDR` | Public IP address |
+| `VAST_TCP_PORT_*` | Mapped public ports |
+
+### Backend Variables (Not Vespa-Specific)
+
+These are used by backend servers, not Vespa configuration:
+
+| Variable | Used By | Description |
+|----------|---------|-------------|
+| `MODEL_NAME` | vLLM, Ollama, TGI | Model name for API requests |
+| `HF_TOKEN` | HuggingFace models | Authentication token |
+
+---
+
+## Example Configurations
+
+### vLLM / Ollama
+
+```bash
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export MODEL_NAME="meta-llama/Llama-2-7b-hf"
+```
+
+### Text Generation Inference (TGI)
+
+```bash
+export VESPA_BACKEND_URL="http://localhost:8080"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+```
+
+### Custom API (Non-Concurrent)
+
+```bash
+export VESPA_BACKEND_URL="http://localhost:5000"
+export VESPA_BENCHMARK="my_module:my_benchmark"
+export VESPA_HEALTHCHECK_ENDPOINT="/status"
+export VESPA_ALLOW_PARALLEL="false"
+```
+
+---
 
 ## Benchmarking
 
-The **only** custom code is your benchmark function. This tells PyWorker how fast your backend can process requests.
+Vespa requires a benchmark function to measure backend throughput for autoscaling.
 
 ### Benchmark Function Signature
 
 ```python
 async def benchmark(backend_url: str, session: ClientSession) -> float:
     """
-    Run performance benchmark.
+    Measure backend throughput.
 
     Args:
-        backend_url: Base URL of your backend (e.g., "http://localhost:8000")
+        backend_url: Base URL of backend (e.g., "http://localhost:8000")
         session: aiohttp ClientSession for making requests
 
     Returns:
-        max_throughput: Maximum workload units processed per second
+        max_throughput: Maximum workload units per second
     """
-    # Your benchmark logic here
+    # Run performance tests
     return max_throughput
 ```
 
-### Example: OpenAI API Benchmark
+### Built-in Benchmarks
 
-See `benchmarks/openai.py` for a complete example that benchmarks OpenAI-compatible APIs (vLLM, Ollama, TGI, llama.cpp).
+- **`benchmarks.openai:benchmark`** - OpenAI-compatible APIs (vLLM, Ollama, TGI, llama.cpp)
+- **`benchmarks.tgi:benchmark`** - Text Generation Inference
+- **`benchmarks.comfyui:benchmark`** - ComfyUI image generation
 
-### Using Your Benchmark
+See [BENCHMARKS.md](BENCHMARKS.md) for writing custom benchmarks.
+
+---
+
+## How It Works
+
+### Request Flow
+
+```
+Client → Vast.ai Autoscaler → Vespa → Backend API
+              ↓                  ↓
+       (routes & signs)    (validates & streams)
+```
+
+1. Client sends request to Vast.ai endpoint
+2. Autoscaler calculates workload, signs request, routes to worker
+3. Vespa validates signature, forwards to backend
+4. Backend processes request
+5. Vespa streams response back to client, updates metrics
+
+### Metrics Tracked
+
+- **Requests**: workload served/received/cancelled/errored/rejected
+- **Model**: throughput, queue depth, wait time, errors
+- **System**: disk usage, loading time
+
+Reported every second to autoscaler for dynamic scaling and health monitoring.
+
+### Streaming Detection
+
+Vespa automatically detects streaming responses by:
+- Content-Type: `text/event-stream` or `application/x-ndjson`
+- Transfer-Encoding: `chunked`
+- Content-Type contains `stream`
+
+Streams are passed through chunk-by-chunk without buffering.
+
+---
+
+## Local Development
+
+### Testing in Passthrough Mode
+
+When `VESPA_UNSECURED=true`, send requests directly without auth_data wrapper:
 
 ```bash
-export BENCHMARK="benchmarks.openai:benchmark"
-# or
-export BENCHMARK="my_module.benchmarks:my_function"
-```
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `BACKEND_URL` | Yes | - | Backend API URL (e.g., `http://localhost:8000`) |
-| `BENCHMARK` | Recommended | None | Python module path to benchmark function (e.g., `benchmarks.openai:benchmark`) |
-| `BACKEND` | No | `generic` | Worker type (use `generic` for new setup) |
-| `HEALTHCHECK_ENDPOINT` | No | `/health` | Health check path - defaults to `/health` if not specified |
-| `READY_TIMEOUT` | No | `1200` | Seconds to wait for backend ready before failing (default: 20 minutes) |
-| `ALLOW_PARALLEL` | No | `true` | Allow concurrent requests |
-| `MAX_WAIT_TIME` | No | `10.0` | Max queue wait time before rejecting (seconds) |
-| `WORKER_PORT` | No | `3000` | Port to listen on |
-| `UNSECURED` | No | `false` | Disable signature verification (dev only) |
-
-### Vast.ai Configuration
-
-These are set by Vast.ai automatically:
-
-| Variable | Description |
-|----------|-------------|
-| `MASTER_TOKEN` | Authentication token for autoscaler |
-| `REPORT_ADDR` | Autoscaler URL for metrics reporting |
-| `CONTAINER_ID` | Unique worker instance ID |
-| `PUBLIC_IPADDR` | Public IP address |
-
-## Example Configurations
-
-### vLLM / Ollama / OpenAI-Compatible
-
-```bash
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
-export MODEL_NAME="meta-llama/Llama-2-7b-hf"
-export HEALTHCHECK_ENDPOINT="/health"
-```
-
-### Text Generation Inference (TGI)
-
-```bash
-export BACKEND_URL="http://localhost:8080"
-export BENCHMARK="benchmarks.openai:benchmark"  # TGI also supports OpenAI format
-export HEALTHCHECK_ENDPOINT="/health"
-```
-
-### Any Custom API
-
-```bash
-export BACKEND_URL="http://localhost:5000"
-export BENCHMARK="my_benchmarks:my_api_benchmark"
-export HEALTHCHECK_ENDPOINT="/status"
-export ALLOW_PARALLEL="false"  # If your API doesn't support concurrency
-```
-
-## Comparison: Old vs New
-
-### Old Architecture ❌
-
-```
-workers/
-├── openai/          # Custom worker for OpenAI
-│   ├── server.py    # 60 lines of boilerplate
-│   └── data_types/
-│       └── server.py  # 200 lines of handlers
-├── tgi/             # Custom worker for TGI
-│   ├── server.py    # 60 lines of boilerplate
-│   └── data_types/
-│       └── server.py  # 150 lines of handlers
-└── comfyui/         # Custom worker for ComfyUI
-    ├── server.py    # 60 lines of boilerplate
-    └── data_types/
-        └── server.py  # 300 lines of handlers
-```
-
-**Problems:**
-- 410+ lines of code per API
-- Hardcoded endpoints
-- POST-only
-- Complex payload transformations
-- Manual workload calculation
-
-### New Architecture ✅
-
-```
-pyworker/
-├── server.py        # 100 lines - works for ALL APIs!
-├── lib/             # Core framework (backend, metrics, etc.)
-└── benchmarks/      # Just benchmark functions
-    ├── openai.py    # 130 lines
-    ├── tgi.py       # 140 lines
-    └── comfyui.py   # 240 lines
-```
-
-**Benefits:**
-- **10x less code** - 80-240 lines vs 410+ lines per API
-- **Universal** - Works with any HTTP API
-- **Simple** - Just write 1 benchmark function
-- **Flexible** - All HTTP methods, any endpoint
-- **Flat structure** - No complex directory hierarchies
-
-## Development
-
-### Running Locally
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set env vars
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
-export UNSECURED="true"  # Skip signature verification for local testing
-
-# Run
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_WORKER_PORT="3000"
+export VESPA_UNSECURED="true"
 python server.py
 ```
 
-### Testing Without Autoscaler
-
-**Passthrough Mode (Recommended):** When `UNSECURED=true`, just send requests directly!
-
 ```bash
-# Simple! Just like calling your backend API
+# Simple passthrough
 curl -X POST http://localhost:3000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -248,9 +246,9 @@ curl -X POST http://localhost:3000/v1/completions \
   }'
 ```
 
-Vespa automatically wraps your request for metrics tracking.
+### Testing in Production Format
 
-**Production Format (Optional):** Test with full auth_data wrapper:
+Test with full auth_data wrapper (for debugging autoscaler integration):
 
 ```bash
 curl -X POST http://localhost:3000/v1/completions \
@@ -272,76 +270,79 @@ curl -X POST http://localhost:3000/v1/completions \
   }'
 ```
 
-## Architecture Details
-
-### Metrics Tracking
-
-Vespa automatically tracks and reports:
-
-- **Request metrics**: workload, status, duration
-- **Model metrics**: throughput, queue depth, errors
-- **System metrics**: disk usage, loading time
-
-Reported every second to Vast.ai autoscaler for:
-- Dynamic scaling decisions
-- Cost calculation
-- Health monitoring
-
-### Streaming
-
-Vespa automatically detects streaming responses by checking:
-- Content-Type: `text/event-stream`
-- Content-Type: `application/x-ndjson`
-- Transfer-Encoding: `chunked`
-- Content-Type contains `stream`
-
-Streams are passed through chunk-by-chunk without buffering.
+---
 
 ## Client Usage
 
-Want to call Vast.ai endpoints from your code? Use the client!
+Want to call Vast.ai endpoints from your code? Use the client proxy - it's now easier than ever!
 
-### Quick Start
+### Interactive Mode (Easiest)
 
 ```bash
-# Start proxy server
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
+# Just run it - prompts for everything
+python client.py
 ```
 
-Now use `localhost:8010` in your code:
+It will:
+1. Prompt for your account API key
+2. Show all your endpoints
+3. Auto-fetch the endpoint key
+4. Start the proxy
+
+### One Command
+
+```bash
+# With account key (auto-fetches endpoint key)
+python client.py --endpoint my-endpoint --account-key YOUR_ACCOUNT_KEY
+
+# List available endpoints
+python client.py --list --account-key YOUR_ACCOUNT_KEY
+```
+
+### Environment Variables
+
+```bash
+export VAST_ACCOUNT_KEY="your-key"
+export VAST_ENDPOINT="my-endpoint"
+python client.py  # Just works!
+```
+
+### Using the Proxy
 
 ```python
 import requests
 
-# Works with any framework!
+# Point your app at localhost:8010
 response = requests.post(
-    "http://localhost:8010/v1/chat/completions",
-    json={"messages": [{"role": "user", "content": "Hello!"}]},
+    "http://localhost:8010/v1/completions",
+    json={"model": "my-model", "prompt": "Hello"}
 )
 ```
 
-### Or Use as Module
-
-```python
-from client import VastClient
-
-client = VastClient(endpoint_name="my-endpoint", api_key="YOUR_KEY")
-response = client.post("/v1/completions", json={...})
-```
-
-See **[CLIENT.md](CLIENT.md)** for complete documentation.
+See [CLIENT.md](CLIENT.md) for complete documentation.
 
 ---
 
 ## Troubleshooting
 
+### Backend Connection Error
+
+**Error:** `Cannot connect to host localhost:8000`
+
+**Solutions:**
+1. Verify `VESPA_BACKEND_URL` is correct
+2. Ensure backend is running: `curl $VESPA_BACKEND_URL/health`
+3. Check firewall/network settings
+
 ### Benchmark Fails
 
 **Error:** `Benchmark failed: <error>`
 
-**Solution:** Check your benchmark function:
+**Solutions:**
+1. Verify backend is responding to health checks
+2. Check benchmark function matches your API format
+3. Test benchmark directly:
 ```bash
-# Test benchmark directly
 python -c "
 import asyncio
 from aiohttp import ClientSession
@@ -356,21 +357,61 @@ asyncio.run(test())
 "
 ```
 
-### Backend Not Responding
+### Worker Not Ready
 
-**Error:** `Request error: Cannot connect to host localhost:8000`
+**Error:** `Backend failed to become ready after N seconds`
 
-**Solution:**
-1. Check `BACKEND_URL` is correct
-2. Ensure backend is running: `curl $BACKEND_URL/health`
-3. Check firewall/network settings
+**Solutions:**
+1. Increase `VESPA_READY_TIMEOUT` for slow-loading models
+2. Verify `VESPA_HEALTHCHECK_ENDPOINT` returns HTTP 200 when ready
+3. Check backend logs for errors
 
-## Community & Support
+---
 
-Join the conversation and get help:
+## Architecture
 
-*   **Vast.ai Discord:** [https://discord.gg/Pa9M29FFye](https://discord.gg/Pa9M29FFye)
-*   **Vast.ai Subreddit:** [https://reddit.com/r/vastai/](https://reddit.com/r/vastai/)
+### File Structure
+
+```
+vespa/
+├── server.py              # Entry point (120 lines)
+├── lib/
+│   ├── backend.py         # Request handling & proxy logic
+│   ├── metrics.py         # Metrics tracking & reporting
+│   ├── data_types.py      # Data structures
+│   └── server.py          # aiohttp server setup
+├── benchmarks/            # Benchmark functions
+│   ├── openai.py
+│   ├── tgi.py
+│   └── comfyui.py
+└── start_server.sh        # Production startup script
+```
+
+### Why Vespa?
+
+**Old Architecture Problems:**
+- 400+ lines of boilerplate per API type
+- Hardcoded endpoints
+- Complex payload transformations
+- Manual workload calculations
+- POST-only
+
+**Vespa Solution:**
+- Universal proxy works with any HTTP API
+- No custom code except benchmark function
+- Automatic streaming detection
+- All HTTP methods supported
+- 80% less code
+
+---
+
+## Resources
+
+- **Vast.ai Discord:** https://discord.gg/Pa9M29FFye
+- **Vast.ai Subreddit:** https://reddit.com/r/vastai/
+- **Benchmark Guide:** [BENCHMARKS.md](BENCHMARKS.md)
+- **Client Guide:** [CLIENT.md](CLIENT.md)
+- **Migration Guide:** [MIGRATION.md](MIGRATION.md)
 
 ## License
 

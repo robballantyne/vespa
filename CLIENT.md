@@ -1,36 +1,187 @@
-# Vespa Client
+# Vespa Client - Zero-Barrier Vast.ai Access
 
-Simple client for Vast.ai serverless endpoints that abstracts away all the routing complexity.
+Simple client proxy for Vast.ai serverless endpoints. Eliminates all routing complexity.
 
-## Problem
+## Quick Start (3 Ways)
 
-Using Vast.ai endpoints currently requires:
-1. Call `run.vast.ai/route/` with endpoint API key
-2. Get worker URL, signature, and routing info
-3. Wrap your request in `auth_data` + `payload` format
-4. Send to worker
-5. Parse response
+### 1. Interactive Mode (Easiest!)
 
-This is complex and error-prone!
-
-## Solution
-
-The Vespa client handles all of this automatically. Two ways to use it:
-
-### Option 1: Local Proxy Server (Easiest!)
-
-Start a local proxy that handles all Vast.ai routing:
+Just run the client:
 
 ```bash
-# Start proxy
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
+python client.py
+```
 
-# Or use environment variable
-export VAST_API_KEY="YOUR_KEY"
+It will:
+1. Prompt for your account API key
+2. Show all your endpoints
+3. Let you select one
+4. Auto-fetch the endpoint key
+5. Start the proxy
+
+**That's it!** Point your app at `localhost:8010`.
+
+### 2. Account Key (One Command)
+
+```bash
+python client.py --endpoint my-endpoint --account-key YOUR_ACCOUNT_KEY
+```
+
+Auto-fetches the endpoint key for you.
+
+### 3. Endpoint Key (If You Have It)
+
+```bash
+python client.py --endpoint my-endpoint --api-key ENDPOINT_KEY
+```
+
+Traditional approach if you already have the endpoint API key.
+
+---
+
+## Key Features
+
+### ✅ No API Key Confusion
+
+The client handles both key types:
+- **Account API key** - Your main Vast.ai key (auto-fetches endpoint key)
+- **Endpoint API key** - Per-endpoint key (if you have it)
+
+Most users should use account key with `--account-key` or interactive mode.
+
+### ✅ Endpoint Discovery
+
+```bash
+# List all your endpoints
+python client.py --list --account-key YOUR_KEY
+```
+
+### ✅ Multiple Ways to Provide Keys
+
+Priority order (first found wins):
+
+1. **CLI flags** - `--account-key` or `--api-key`
+2. **Environment variables** - `VAST_ACCOUNT_KEY`, `VAST_ENDPOINT`, `VAST_API_KEY`
+3. **File** - `~/.vast_api_key` (vastai CLI compatible)
+
+### ✅ Helpful Error Messages
+
+Get clear guidance when something goes wrong:
+```
+ERROR: 401 Unauthorized
+
+HINT: 401 Unauthorized usually means:
+  - You're using the wrong API key type
+  - Endpoint API key is required, not account API key
+  - Use --account-key to auto-fetch the correct key
+```
+
+---
+
+## All Usage Methods
+
+### Interactive Mode
+
+```bash
+# No arguments = interactive prompts
+python client.py
+```
+
+**Output:**
+```
+============================================================
+  Vespa Client - Interactive Setup
+============================================================
+
+First, we need your Vast.ai account API key.
+(Get it from: https://console.vast.ai/account)
+
+Enter account API key: ****
+
+Fetching your endpoints...
+
+Available endpoints (3):
+  1. my-llm-endpoint
+  2. my-comfyui-endpoint
+  3. test-endpoint
+
+Select endpoint [1-3]: 1
+
+Local proxy port [8010]:
+
+Fetching endpoint API key for 'my-llm-endpoint'...
+Successfully retrieved endpoint API key
+
+============================================================
+  Starting proxy for: my-llm-endpoint
+  Listening on: http://127.0.0.1:8010
+============================================================
+```
+
+### Command Line with Account Key
+
+```bash
+# Basic
+python client.py --endpoint my-endpoint --account-key YOUR_ACCOUNT_KEY
+
+# Custom port
+python client.py --endpoint my-endpoint --account-key YOUR_KEY --port 8080
+
+# Debug mode
+python client.py --endpoint my-endpoint --account-key YOUR_KEY --debug
+```
+
+### Environment Variables
+
+```bash
+# Set once
+export VAST_ACCOUNT_KEY="your-account-key"
+export VAST_ENDPOINT="my-endpoint"
+
+# Just run
+python client.py
+```
+
+### File-Based (vastai CLI compatible)
+
+```bash
+# Create key file
+echo "your-account-key" > ~/.vast_api_key
+
+# Run with endpoint name
 python client.py --endpoint my-endpoint
 ```
 
-Now point your existing code at `localhost:8010` instead of the real API:
+### List Endpoints
+
+```bash
+# With flag
+python client.py --list --account-key YOUR_KEY
+
+# With env var
+export VAST_ACCOUNT_KEY="your-key"
+python client.py --list
+
+# With file
+echo "your-key" > ~/.vast_api_key
+python client.py --list
+```
+
+**Output:**
+```
+Available endpoints (3):
+  • my-llm-endpoint
+  • my-comfyui-endpoint
+  • test-endpoint
+```
+
+---
+
+## Using the Proxy
+
+Once started, point your application at the proxy:
+
+### HTTP Requests
 
 ```python
 import requests
@@ -48,19 +199,61 @@ response = requests.post(
 print(response.json())
 ```
 
-That's it! The proxy handles all the Vast.ai routing behind the scenes.
+### OpenAI SDK
 
-### Option 2: Python Module
+```python
+from openai import OpenAI
 
-Import the client directly for more control:
+# Point at proxy
+client = OpenAI(
+    base_url="http://localhost:8010/v1",
+    api_key="not-used"  # Proxy handles auth
+)
+
+response = client.chat.completions.create(
+    model="llama-2-7b",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+### Streaming
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8010/v1/completions",
+    json={"prompt": "test", "stream": True},
+    stream=True,
+)
+
+for chunk in response.iter_content(chunk_size=None):
+    print(chunk.decode(), end="")
+```
+
+---
+
+## Python Module Usage
+
+Import directly for more control:
 
 ```python
 from client import VastClient
 
-# Initialize
+# Initialize with account key (auto-fetches endpoint key)
+from utils.endpoint_util import Endpoint
+endpoint_key = Endpoint.get_endpoint_api_key(
+    endpoint_name="my-endpoint",
+    account_api_key="YOUR_ACCOUNT_KEY",
+    instance="prod"
+)
+
+# Or initialize with endpoint key directly
 client = VastClient(
     endpoint_name="my-endpoint",
-    api_key="YOUR_KEY",
+    api_key=endpoint_key,
 )
 
 # Make requests
@@ -75,42 +268,6 @@ response = client.post(
 print(response.json())
 ```
 
-## Features
-
-### Automatic Routing
-
-The client automatically:
-- ✅ Calls `/route/` to get worker assignment
-- ✅ Wraps requests in `auth_data` + `payload` format
-- ✅ Forwards to assigned worker
-- ✅ Handles authentication and signatures
-- ✅ Returns standard responses
-
-### Workload Detection
-
-Automatically detects workload from common fields:
-- `max_tokens` (OpenAI)
-- `max_new_tokens` (TGI)
-- `steps` (ComfyUI)
-
-Or specify manually:
-```python
-client.post("/endpoint", json={...}, workload=500.0)
-```
-
-### Streaming Support
-
-```python
-response = client.post(
-    "/v1/completions",
-    json={"prompt": "test", "stream": True},
-    stream=True,
-)
-
-for chunk in response.iter_content(chunk_size=None):
-    print(chunk.decode(), end="")
-```
-
 ### All HTTP Methods
 
 ```python
@@ -121,180 +278,106 @@ client.patch("/modify", json={...})
 client.delete("/remove")
 ```
 
-## Installation
-
-No installation needed! Just use the `client.py` file:
-
-```bash
-# Clone or download
-git clone https://github.com/robballantyne/vespa
-cd vespa
-
-# Run proxy
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
-```
-
-Dependencies (already in requirements.txt):
-- `requests`
-- `aiohttp` (for proxy server only)
-
-## Usage
-
-### As Proxy Server
-
-```bash
-# Basic usage
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
-
-# Custom port
-python client.py --endpoint my-endpoint --api-key YOUR_KEY --port 8080
-
-# Debug mode
-python client.py --endpoint my-endpoint --api-key YOUR_KEY --debug
-
-# Environment variable
-export VAST_API_KEY="YOUR_KEY"
-python client.py --endpoint my-endpoint
-```
-
-Then point your app at `http://localhost:8010` (or custom port).
-
-### As Python Module
+### Custom Workload
 
 ```python
-from client import VastClient
+# Auto-detected from max_tokens, max_new_tokens, steps
+client.post("/v1/completions", json={"max_tokens": 500})
 
-# Initialize
-client = VastClient(
-    endpoint_name="my-endpoint",
-    api_key="YOUR_KEY",
-)
-
-# Make requests
-response = client.post("/v1/completions", json={
-    "model": "my-model",
-    "prompt": "test",
-    "max_tokens": 50,
-})
-
-# Check response
-if response.status_code == 200:
-    print(response.json())
-else:
-    print(f"Error: {response.status_code}")
+# Or specify manually
+client.post("/endpoint", json={...}, workload=500.0)
 ```
 
-## Examples
+---
 
-See `examples/` directory:
-- `use_proxy.py` - Using the proxy server
-- `use_module.py` - Using as a Python module
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VAST_API_KEY` | Endpoint API key | Required if not passed as argument |
+## Configuration Reference
 
 ### CLI Arguments
 
-```
+```bash
 python client.py --help
 
-Options:
-  --endpoint ENDPOINT       Vast.ai endpoint name (required)
-  --api-key API_KEY        Endpoint API key
+Arguments:
+  --endpoint ENDPOINT       Vast.ai endpoint name (or set VAST_ENDPOINT)
+  --api-key KEY            Endpoint API key (or set VAST_API_KEY)
+  --account-key KEY        Account API key - auto-fetches endpoint key
+                           (or set VAST_ACCOUNT_KEY, or use ~/.vast_api_key)
+  --list                   List available endpoints (requires account key)
   --port PORT              Local proxy port (default: 8010)
   --host HOST              Local proxy host (default: 127.0.0.1)
   --autoscaler-url URL     Autoscaler URL (default: https://run.vast.ai)
+  --instance INSTANCE      Vast.ai instance: prod, alpha, candidate (default: prod)
   --debug                  Enable debug logging
 ```
 
-### VastClient Options
+### Environment Variables
 
-```python
-VastClient(
-    endpoint_name="my-endpoint",    # Required: endpoint name
-    api_key="YOUR_KEY",             # Required: endpoint API key
-    autoscaler_url="https://run.vast.ai",  # Optional
-    instance="prod",                # Optional: prod, alpha, candidate
-)
-```
+| Variable | Description |
+|----------|-------------|
+| `VAST_ACCOUNT_KEY` | Account API key (for auto-fetching) |
+| `VAST_ENDPOINT` | Endpoint name |
+| `VAST_API_KEY` | Endpoint API key (if you have it) |
+
+### File
+
+Create `~/.vast_api_key` with your account API key (compatible with vastai CLI).
+
+### Priority Order
+
+When multiple sources are provided:
+1. CLI flags (highest priority)
+2. Environment variables
+3. `~/.vast_api_key` file (lowest priority)
+
+---
 
 ## Getting Your API Key
 
-You need your **endpoint API key** (not your account API key).
+### Account API Key (Recommended)
 
-### Option 1: Via Console
+1. Go to https://console.vast.ai/account
+2. Copy your API key
+3. Use with `--account-key` flag
 
-1. Go to https://console.vast.ai
-2. Navigate to Endpoints
-3. Find your endpoint
-4. Copy the endpoint API key
+**Use this for:** Auto-fetching endpoint keys, listing endpoints, interactive mode
 
-### Option 2: Via utils/endpoint_util.py
+### Endpoint API Key (Advanced)
 
-```python
-from utils.endpoint_util import Endpoint
+1. Go to https://console.vast.ai/endpoints
+2. Find your endpoint
+3. Copy the endpoint-specific API key
 
-# Get endpoint API key using account API key
-endpoint_api_key = Endpoint.get_endpoint_api_key(
-    endpoint_name="my-endpoint",
-    account_api_key="YOUR_ACCOUNT_KEY",
-    instance="prod",
-)
+**Use this for:** Direct access when you already have the endpoint key
 
-print(endpoint_api_key)
-```
-
-## How It Works
-
-### Traditional Flow (Complex)
-
-```
-Your Code
-  ↓
-Call run.vast.ai/route/ with API key
-  ↓
-Get worker URL + signature
-  ↓
-Wrap request in auth_data + payload
-  ↓
-POST to worker
-  ↓
-Parse response
-```
-
-### With PyWorker Client (Simple)
-
-```
-Your Code
-  ↓
-POST http://localhost:8010/endpoint
-  ↓
-Client handles everything
-  ↓
-Get response
-```
-
-The client:
-1. Intercepts your request
-2. Calls `/route/` to get worker assignment
-3. Wraps in `auth_data` + `payload` format
-4. Forwards to worker
-5. Returns response
-
-## Compatibility
-
-Works with:
-- ✅ OpenAI-compatible APIs (vLLM, Ollama, TGI)
-- ✅ Text Generation Inference (TGI)
-- ✅ ComfyUI
-- ✅ Any HTTP API proxied through PyWorker
+---
 
 ## Troubleshooting
+
+### No ~/.vast_api_key File
+
+```bash
+# Create it
+echo "your-account-key" > ~/.vast_api_key
+chmod 600 ~/.vast_api_key  # Secure it
+```
+
+### 401 Unauthorized
+
+**Problem:** Wrong API key type
+
+**Solution:** Use account key with `--account-key` or interactive mode:
+```bash
+python client.py --endpoint my-endpoint --account-key YOUR_ACCOUNT_KEY
+```
+
+### No Endpoints Found
+
+**Problem:** `--list` shows no endpoints
+
+**Solutions:**
+- Verify you have created endpoints at console.vast.ai
+- Check you're using the correct account API key
+- Try `--instance alpha` if using alpha environment
 
 ### Connection Refused
 
@@ -302,100 +385,66 @@ Works with:
 
 **Solution:** Make sure the proxy is running:
 ```bash
-python client.py --endpoint my-endpoint --api-key YOUR_KEY
+python client.py --endpoint my-endpoint --account-key YOUR_KEY
 ```
 
-### 401 Unauthorized
+### Endpoint Not Found
 
-**Problem:** `401 Unauthorized from autoscaler`
+**Problem:** `Endpoint 'xyz' not found`
 
-**Solution:** Check your API key:
-- Use **endpoint API key**, not account API key
-- Verify endpoint exists in console.vast.ai
-- Check API key hasn't expired
+**Solutions:**
+- List your endpoints: `python client.py --list --account-key KEY`
+- Verify endpoint name is correct
+- Check endpoint exists in console.vast.ai
 
-### Route Failed
+---
 
-**Problem:** `Route failed: no workers available`
+## Examples
 
-**Solution:**
-- Check your endpoint has running workers
-- Verify workers are healthy in console.vast.ai
-- Check endpoint hasn't run out of credits
-
-### Workload Detection
-
-**Problem:** Client sends wrong workload
-
-**Solution:** Specify manually:
-```python
-client.post("/endpoint", json={...}, workload=500.0)
-```
-
-## Advanced Usage
-
-### Custom Routing
-
-```python
-from client import VastClient
-
-client = VastClient(endpoint_name="my-endpoint", api_key="YOUR_KEY")
-
-# Get routing info manually
-routing = client.route(endpoint="/v1/completions", workload=500.0)
-print(routing)
-# {'url': 'https://worker-ip:3000', 'signature': '...', ...}
-
-# Use routing info for custom request
-# ...
-```
-
-### Custom Headers
-
-```python
-response = client.post(
-    "/endpoint",
-    json={...},
-    headers={"X-Custom": "value"},
-)
-```
-
-### Timeouts
-
-```python
-import requests
-from client import VastClient
-
-client = VastClient(...)
-
-# requests.request() is used internally, so standard requests options work
-response = client.post("/endpoint", json={...}, timeout=60)
-```
-
-## Development
-
-### Running Tests
+### Quick Test
 
 ```bash
-# Start a test proxy
-python client.py --endpoint test-endpoint --api-key test-key --debug
+# Start proxy
+python client.py
 
-# In another terminal, test it
-python examples/use_proxy.py
+# In another terminal
+curl http://localhost:8010/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello", "max_tokens": 50}'
 ```
 
-### Modifying the Client
+### Production Setup
 
-The client is a single file: `client.py`
+```bash
+# Create config
+echo "your-account-key" > ~/.vast_api_key
+export VAST_ENDPOINT="production-endpoint"
 
-Key classes:
-- `VastClient` - Core client for making requests
-- `VastProxy` - Local proxy server
-- `main()` - CLI entry point
+# Run proxy
+python client.py
+
+# Deploy your app pointing at localhost:8010
+```
+
+### Multiple Endpoints
+
+```bash
+# Endpoint 1 on port 8010
+python client.py --endpoint endpoint1 --account-key KEY --port 8010 &
+
+# Endpoint 2 on port 8011
+python client.py --endpoint endpoint2 --account-key KEY --port 8011 &
+
+# App can use both
+curl http://localhost:8010/v1/completions -d '{...}'
+curl http://localhost:8011/v1/completions -d '{...}'
+```
+
+---
 
 ## Comparison
 
-### Without Client (Manual)
+### Before (Manual Routing)
 
 ```python
 import requests
@@ -403,7 +452,7 @@ import requests
 # Step 1: Get worker assignment
 route_response = requests.post(
     "https://run.vast.ai/route/",
-    headers={"Authorization": f"Bearer {api_key}"},
+    headers={"Authorization": f"Bearer {endpoint_api_key}"},
     json={"endpoint": "/v1/completions", "cost": 100},
 )
 routing = route_response.json()
@@ -419,7 +468,6 @@ payload = {
         "url": routing["url"],
     },
     "payload": {
-        "model": "llama-2-7b",
         "prompt": "test",
         "max_tokens": 100,
     }
@@ -427,28 +475,85 @@ payload = {
 
 # Step 3: Send to worker
 response = requests.post(routing["url"], json=payload)
-print(response.json())
 ```
 
-**Total:** ~30 lines of boilerplate
+**Total:** ~30 lines of complex boilerplate
 
-### With Client (Automatic)
+### After (With Vespa Client)
+
+```bash
+# Start proxy once
+python client.py
+
+# Use normally
+```
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8010/v1/completions",
+    json={"prompt": "test", "max_tokens": 100}
+)
+```
+
+**Total:** 1 command + 5 lines of normal code
+
+---
+
+## Advanced
+
+### Custom Routing
 
 ```python
 from client import VastClient
 
-client = VastClient(endpoint_name="my-endpoint", api_key=api_key)
+client = VastClient(endpoint_name="my-endpoint", api_key="KEY")
 
-response = client.post("/v1/completions", json={
-    "model": "llama-2-7b",
-    "prompt": "test",
-    "max_tokens": 100,
-})
-
-print(response.json())
+# Get routing info manually
+routing = client.route(endpoint="/v1/completions", workload=500.0)
+print(routing)
+# {'url': 'https://worker-ip:3000', 'signature': '...', ...}
 ```
 
-**Total:** 5 lines
+### Custom Headers
+
+```python
+response = client.post(
+    "/endpoint",
+    json={...},
+    headers={"X-Custom": "value"},
+)
+```
+
+### Timeouts
+
+```python
+# Default timeout is 300 seconds
+response = client.post("/endpoint", json={...}, timeout=60)
+```
+
+---
+
+## Why Use the Client?
+
+- **Zero Barrier** - Interactive mode requires zero knowledge
+- **No Confusion** - Handles both API key types automatically
+- **Discovery** - Built-in endpoint listing
+- **Compatible** - Works with vastai CLI (`~/.vast_api_key`)
+- **Flexible** - CLI, environment, file, or interactive
+- **Helpful** - Clear error messages guide you
+- **Standard** - Use any HTTP client/SDK normally
+
+---
+
+## Resources
+
+- **Vast.ai Console:** https://console.vast.ai
+- **Account API Key:** https://console.vast.ai/account
+- **Endpoints:** https://console.vast.ai/endpoints
+- **Discord:** https://discord.gg/Pa9M29FFye
+- **Subreddit:** https://reddit.com/r/vastai/
 
 ## License
 

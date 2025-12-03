@@ -10,8 +10,8 @@ This directory contains benchmark functions for different backend types. Each be
 
 **Usage:**
 ```bash
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"
 ```
 
@@ -42,8 +42,8 @@ POST /v1/completions
 
 **Usage:**
 ```bash
-export BACKEND_URL="http://localhost:8080"
-export BENCHMARK="benchmarks.tgi:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8080"
+export VESPA_BENCHMARK="benchmarks.tgi:benchmark"
 ```
 
 **API Format:**
@@ -74,8 +74,8 @@ POST /generate
 
 **Usage:**
 ```bash
-export BACKEND_URL="http://localhost:8188"
-export BENCHMARK="benchmarks.comfyui:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8188"
+export VESPA_BENCHMARK="benchmarks.comfyui:benchmark"
 ```
 
 **API Format:**
@@ -120,7 +120,7 @@ touch benchmarks/myapi.py
 Benchmark function for My API.
 
 Usage:
-    BENCHMARK=benchmarks.myapi:benchmark
+    VESPA_BENCHMARK=benchmarks.myapi:benchmark
 """
 import time
 import logging
@@ -209,7 +209,7 @@ def get_test_request() -> tuple[str, dict, float]:
 ### 4. Use Your Benchmark
 
 ```bash
-export BENCHMARK="benchmarks.myapi:benchmark"
+export VESPA_BENCHMARK="benchmarks.myapi:benchmark"
 ```
 
 ### Key Principles
@@ -260,8 +260,8 @@ Or test through PyWorker:
 # ...
 
 # Start PyWorker
-export BACKEND_URL="http://localhost:8000"
-export BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BACKEND_URL="http://localhost:8000"
+export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"
 python -m workers.generic.server
 
@@ -363,8 +363,8 @@ This ensures:
 **Problem:** Benchmark returns 1.0 without running
 
 **Solutions:**
-1. Check `BACKEND_URL` is correct
-2. Verify backend is running: `curl $BACKEND_URL/health`
+1. Check `VESPA_BACKEND_URL` is correct
+2. Verify backend is running: `curl $VESPA_BACKEND_URL/health`
 3. Check endpoint path (e.g., `/v1/completions` vs `/completions`)
 4. Review logs for connection errors
 
@@ -395,7 +395,7 @@ This ensures:
 **Solutions:**
 1. Check API format matches backend expectations
 2. Verify authentication/API keys if required
-3. Test endpoint manually: `curl -X POST $BACKEND_URL/endpoint -d '...'`
+3. Test endpoint manually: `curl -X POST $VESPA_BACKEND_URL/endpoint -d '...'`
 4. Check backend logs for errors
 
 ---

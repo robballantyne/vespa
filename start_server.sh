@@ -10,8 +10,8 @@ DEBUG_LOG="$WORKSPACE_DIR/debug.log"
 VESPA_LOG="$WORKSPACE_DIR/vespa.log"
 
 REPORT_ADDR="${REPORT_ADDR:-https://run.vast.ai}"
-USE_SSL="${USE_SSL:-true}"
-WORKER_PORT="${WORKER_PORT:-3000}"
+export VESPA_USE_SSL="${VESPA_USE_SSL:-true}"
+export VESPA_WORKER_PORT="${VESPA_WORKER_PORT:-3000}"
 mkdir -p "$WORKSPACE_DIR"
 cd "$WORKSPACE_DIR"
 
@@ -32,14 +32,15 @@ echo "start_server.sh"
 date
 
 echo_var REPORT_ADDR
-echo_var WORKER_PORT
 echo_var WORKSPACE_DIR
 echo_var SERVER_DIR
 echo_var ENV_PATH
 echo_var DEBUG_LOG
 echo_var VESPA_LOG
-echo "BACKEND_URL: $BACKEND_URL"
-echo "BENCHMARK: ${BENCHMARK:-none}"
+echo "VESPA_WORKER_PORT: ${VESPA_WORKER_PORT:-3000}"
+echo "VESPA_USE_SSL: ${VESPA_USE_SSL:-true}"
+echo "VESPA_BACKEND_URL: ${VESPA_BACKEND_URL:-not set}"
+echo "VESPA_BENCHMARK: ${VESPA_BENCHMARK:-none}"
 
 # if instance is rebooted, we want to clear out the log file so pyworker doesn't read lines
 # from the run prior to reboot. past logs are saved in $MODEL_LOG.old for debugging only
@@ -85,10 +86,10 @@ else
     echo "venv: $VIRTUAL_ENV"
 fi
 
-# Validate BACKEND_URL is set
-if [ -z "$BACKEND_URL" ]; then
-    echo "ERROR: BACKEND_URL must be set!"
-    echo "Example: BACKEND_URL=http://localhost:8000"
+# Validate VESPA_BACKEND_URL is set
+if [ -z "$VESPA_BACKEND_URL" ]; then
+    echo "ERROR: VESPA_BACKEND_URL must be set!"
+    echo "Example: VESPA_BACKEND_URL=http://localhost:8000"
     exit 1
 fi
 
@@ -98,7 +99,7 @@ if [ ! -f "$SERVER_DIR/server.py" ]; then
     exit 1
 fi
 
-if [ "$USE_SSL" = true ]; then
+if [ "$VESPA_USE_SSL" = true ]; then
 
     cat << EOF > /etc/openssl-san.cnf
     [req]
@@ -137,7 +138,7 @@ fi
 
 
 
-export REPORT_ADDR WORKER_PORT USE_SSL UNSECURED
+export REPORT_ADDR
 
 cd "$SERVER_DIR"
 

@@ -27,14 +27,16 @@ VERSION = "0.3.0"
 
 log = logging.getLogger(__file__)
 
-# Configuration constants
-BENCHMARK_INDICATOR_FILE = ".has_benchmark"
-MAX_PUBKEY_FETCH_ATTEMPTS = 3
-HEALTHCHECK_RETRY_INTERVAL = 5  # seconds between healthcheck retries
-HEALTHCHECK_POLL_INTERVAL = 10  # seconds between periodic healthchecks
-HEALTHCHECK_TIMEOUT = 10  # seconds for healthcheck requests
-PUBKEY_FETCH_TIMEOUT = 10  # seconds for pubkey fetch
-METRICS_RETRY_DELAY = 2  # seconds between metrics retry attempts
+# Configuration constants - can be overridden via environment variables
+BENCHMARK_INDICATOR_FILE = os.environ.get("VESPA_BENCHMARK_CACHE_FILE", ".has_benchmark")
+MAX_PUBKEY_FETCH_ATTEMPTS = int(os.environ.get("VESPA_PUBKEY_MAX_RETRIES", "3"))
+HEALTHCHECK_RETRY_INTERVAL = int(os.environ.get("VESPA_HEALTHCHECK_RETRY_INTERVAL", "5"))
+HEALTHCHECK_POLL_INTERVAL = int(os.environ.get("VESPA_HEALTHCHECK_POLL_INTERVAL", "10"))
+HEALTHCHECK_TIMEOUT = int(os.environ.get("VESPA_HEALTHCHECK_TIMEOUT", "10"))
+PUBKEY_FETCH_TIMEOUT = int(os.environ.get("VESPA_PUBKEY_TIMEOUT", "10"))
+METRICS_RETRY_DELAY = int(os.environ.get("VESPA_METRICS_RETRY_DELAY", "2"))
+CONNECTION_LIMIT = int(os.environ.get("VESPA_CONNECTION_LIMIT", "100"))
+CONNECTION_LIMIT_PER_HOST = int(os.environ.get("VESPA_CONNECTION_LIMIT_PER_HOST", "20"))
 
 
 def create_tcp_connector(force_close: bool = True) -> TCPConnector:
@@ -61,16 +63,16 @@ class Backend:
     healthcheck_endpoint: Optional[str] = None
     allow_parallel_requests: bool = True
     max_wait_time: float = dataclasses.field(
-        default_factory=lambda: float(os.environ.get("MAX_WAIT_TIME", "10.0"))
+        default_factory=lambda: float(os.environ.get("VESPA_MAX_WAIT_TIME", "10.0"))
     )
     ready_timeout: int = dataclasses.field(
-        default_factory=lambda: int(os.environ.get("READY_TIMEOUT", "1200"))
+        default_factory=lambda: int(os.environ.get("VESPA_READY_TIMEOUT", "1200"))
     )
     reqnum = -1
     version = VERSION
     sem: Semaphore = dataclasses.field(default_factory=Semaphore)
     unsecured: bool = dataclasses.field(
-        default_factory=lambda: os.environ.get("UNSECURED", "false").lower() == "true",
+        default_factory=lambda: os.environ.get("VESPA_UNSECURED", "false").lower() == "true",
     )
     report_addr: str = dataclasses.field(
         default_factory=lambda: os.environ.get("REPORT_ADDR", "https://run.vast.ai")

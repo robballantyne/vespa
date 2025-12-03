@@ -11,18 +11,21 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector, ClientResponseEr
 from lib.data_types import AutoScalerData, SystemMetrics, ModelMetrics, RequestMetrics
 from typing import Awaitable, NoReturn, List
 
-METRICS_UPDATE_INTERVAL = 1  # seconds between metrics updates
-DELETE_REQUESTS_INTERVAL = 1  # seconds between delete request checks
-METRICS_RETRY_DELAY = 2  # seconds between retry attempts
-METRICS_MAX_RETRIES = 3  # maximum retry attempts
+METRICS_UPDATE_INTERVAL = int(os.environ.get("VESPA_METRICS_UPDATE_INTERVAL", "1"))
+DELETE_REQUESTS_INTERVAL = int(os.environ.get("VESPA_DELETE_REQUESTS_INTERVAL", "1"))
+METRICS_RETRY_DELAY = int(os.environ.get("VESPA_METRICS_RETRY_DELAY", "2"))
+METRICS_MAX_RETRIES = int(os.environ.get("VESPA_METRICS_MAX_RETRIES", "3"))
+METRICS_TIMEOUT = int(os.environ.get("VESPA_METRICS_TIMEOUT", "10"))
+METRICS_CONNECTION_LIMIT = int(os.environ.get("VESPA_METRICS_CONNECTION_LIMIT", "8"))
+METRICS_CONNECTION_LIMIT_PER_HOST = int(os.environ.get("VESPA_METRICS_CONNECTION_LIMIT_PER_HOST", "4"))
 
 log = logging.getLogger(__file__)
 
 
 @cache
 def get_url() -> str:
-    use_ssl = os.environ.get("USE_SSL", "false") == "true"
-    worker_port = os.environ[f"VAST_TCP_PORT_{os.environ['WORKER_PORT']}"]
+    use_ssl = os.environ.get("VESPA_USE_SSL", "false") == "true"
+    worker_port = os.environ[f"VAST_TCP_PORT_{os.environ['VESPA_WORKER_PORT']}"]
     public_ip = os.environ["PUBLIC_IPADDR"]
     return f"http{'s' if use_ssl else ''}://{public_ip}:{worker_port}"
 
@@ -47,13 +50,13 @@ class Metrics:
         """Get or create HTTP session for metrics reporting"""
         if self._session is None:
             connector = TCPConnector(
-                limit=8,
-                limit_per_host=4,
+                limit=METRICS_CONNECTION_LIMIT,
+                limit_per_host=METRICS_CONNECTION_LIMIT_PER_HOST,
                 force_close=True,
                 enable_cleanup_closed=True
             )
             self._session = ClientSession(
-                timeout=ClientTimeout(total=10),
+                timeout=ClientTimeout(total=METRICS_TIMEOUT),
                 connector=connector
             )
         return self._session

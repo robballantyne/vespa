@@ -5,7 +5,7 @@ This benchmark measures throughput in tokens per second by sending concurrent
 completion requests to the API.
 
 Usage:
-    BENCHMARK=benchmarks.openai:benchmark
+    VESPA_BENCHMARK=benchmarks.openai:benchmark
 
 Environment variables:
     MODEL_NAME: Model name to use in requests (default: "model")
