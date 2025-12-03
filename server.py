@@ -5,7 +5,7 @@ This server proxies requests to any backend API without custom transformation.
 It handles authentication, metrics tracking, and benchmarking.
 
 Environment variables:
-- MODEL_SERVER_URL: URL of the backend server (e.g., http://localhost:8000)
+- BACKEND_URL: URL of the backend server (e.g., http://localhost:8000)
 - BENCHMARK: Python module path with benchmark function (e.g., benchmarks.openai:benchmark)
 - HEALTHCHECK_ENDPOINT: Optional healthcheck endpoint (e.g., /health)
 - ALLOW_PARALLEL: Whether to allow parallel requests (default: true)
@@ -40,7 +40,7 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
     Example: benchmarks.openai:benchmark
 
     The function should have signature:
-        async def benchmark(model_url: str, session: ClientSession) -> float:
+        async def benchmark(backend_url: str, session: ClientSession) -> float:
             # Run benchmark and return max_throughput in workload units per second
             return max_throughput
     """
@@ -74,7 +74,7 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
 
 
 # Load configuration from environment
-model_server_url = os.environ.get("MODEL_SERVER_URL", "http://localhost:8000")
+backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
 healthcheck_endpoint = os.environ.get("HEALTHCHECK_ENDPOINT")
 allow_parallel = os.environ.get("ALLOW_PARALLEL", "true").lower() == "true"
 max_wait_time = float(os.environ.get("MAX_WAIT_TIME", "10.0"))
@@ -84,7 +84,7 @@ benchmark_func = load_benchmark_function()
 
 # Create backend
 backend = Backend(
-    model_server_url=model_server_url,
+    backend_url=backend_url,
     benchmark_func=benchmark_func,
     healthcheck_endpoint=healthcheck_endpoint,
     allow_parallel_requests=allow_parallel,
@@ -113,7 +113,7 @@ routes = [
 routes.append(web.get("/ping", handle_ping))
 
 if __name__ == "__main__":
-    log.info(f"Starting Vespa for backend: {model_server_url}")
+    log.info(f"Starting Vespa for backend: {backend_url}")
     log.info(f"Healthcheck endpoint: {healthcheck_endpoint or 'None'}")
     log.info(f"Allow parallel requests: {allow_parallel}")
     log.info(f"Max wait time: {max_wait_time}s")

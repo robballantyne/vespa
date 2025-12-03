@@ -78,7 +78,7 @@ server.py                  # Entry point, loads config and benchmark
   7. Update metrics
 
 **Important fields**:
-- `model_server_url`: Backend API base URL
+- `backend_url`: Backend API base URL
 - `benchmark_func`: Async function that measures throughput
 - `healthcheck_endpoint`: Health check path (defaults to `/health`)
 - `allow_parallel_requests`: Enable concurrent request handling (default: true)
@@ -159,7 +159,7 @@ gather(
 ## Environment Variables
 
 ### Required
-- `MODEL_SERVER_URL`: Backend API base URL (e.g., `http://localhost:8000`)
+- `BACKEND_URL`: Backend API base URL (e.g., `http://localhost:8000`)
 
 ### Optional (Application)
 - `LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL (default: `INFO`)
@@ -204,7 +204,7 @@ await self.benchmark_func(...)          # Then benchmark
 @cached_property
 def session(self):
     connector = TCPConnector(force_close=True, enable_cleanup_closed=True)
-    return ClientSession(self.model_server_url, timeout=..., connector=connector)
+    return ClientSession(self.backend_url, timeout=..., connector=connector)
 ```
 
 **Why safe**:
@@ -246,7 +246,7 @@ def __check_signature(self, auth_data: AuthData) -> bool:
 
 **Pattern**: User-provided async function measuring throughput
 ```python
-async def benchmark(model_url: str, session: ClientSession) -> float:
+async def benchmark(backend_url: str, session: ClientSession) -> float:
     # Run performance tests
     # Return max_throughput in workload units per second
     return tokens_per_second  # or requests/sec, or custom metric
@@ -300,7 +300,7 @@ def backend_errored(self, msg: str):
 1. Create file in `benchmarks/my_api.py`
 2. Implement async function:
    ```python
-   async def benchmark(model_url: str, session: ClientSession) -> float:
+   async def benchmark(backend_url: str, session: ClientSession) -> float:
        # Your benchmark logic
        return max_throughput
    ```
@@ -373,7 +373,7 @@ connector = TCPConnector(
 
 ### Without Autoscaler
 ```bash
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"  # Skip signature verification
 python server.py
@@ -452,6 +452,50 @@ vespa/
 ```
 
 ## Recent Changes Log
+
+### 2025-12-03: Refactored Load Testing to Use Benchmark Modules
+- **Added `get_test_request()` function to all benchmarks**: Each benchmark now exports a helper function for load testing
+  - `benchmarks/openai.py:31-56`: Returns (endpoint, payload, workload) for OpenAI API tests
+  - `benchmarks/tgi.py:38-62`: Returns test request for TGI API
+  - `benchmarks/comfyui.py:65-156`: Returns test request with full ComfyUI workflow
+- **Completely refactored `lib/test_utils.py`**: Removed old `ApiPayload` abstraction
+  - Now imports benchmark module dynamically via `-b` parameter
+  - Calls `get_test_request()` from benchmark to get test payloads
+  - Removed broken `ApiPayload` import (class was removed in earlier refactoring)
+  - Simplified from 311 lines to 329 lines (cleaner, more focused)
+- **Updated BENCHMARKS.md**: Added comprehensive load testing documentation
+  - New "Load Testing with Benchmarks" section with examples
+  - Updated "Writing Custom Benchmarks" to include `get_test_request()` pattern
+
+**Rationale**: The old approach required users to implement separate `ApiPayload.for_test()` methods, duplicating logic that already existed in benchmarks. This creates a single source of truth for test payloads, ensuring load tests use the same workload patterns as benchmarking.
+
+**Impact**:
+- Users no longer need to write custom `ApiPayload` classes for testing
+- Load tests automatically use the same payloads as benchmarks
+- Breaking change: Old load test command syntax changed - now requires `-b benchmark_module` parameter
+
+**Usage**:
+```bash
+# Old (broken):
+# python -m lib.test_utils -k KEY -e endpoint ...
+
+# New:
+python -m lib.test_utils -k KEY -e endpoint -b benchmarks.openai -n 100 -rps 10
+```
+
+### 2025-12-03: Renamed model_server_url to backend_url for Generic Naming
+- **Renamed environment variable**: `MODEL_SERVER_URL` → `BACKEND_URL` throughout codebase
+- **Renamed field**: `model_server_url` → `backend_url` in `lib/backend.py:59`
+- **Renamed parameter**: `model_url` → `backend_url` in benchmark function signatures
+  - `benchmarks/openai.py:31`
+  - `benchmarks/tgi.py:38`
+  - `benchmarks/comfyui.py:65`
+- **Updated documentation**: All references updated in README.md, BENCHMARKS.md, STRUCTURE.md, MIGRATION.md, and CLAUDE.md
+- **Updated scripts**: `start_server.sh` validation and logging now uses `BACKEND_URL`
+
+**Rationale**: The term "model server" implies AI models, but Vespa is designed as a universal proxy for any HTTP API backend. The new naming better reflects this generic purpose and avoids confusion when proxying non-AI services.
+
+**Impact**: This is a breaking change for existing deployments. Users must update their environment variables from `MODEL_SERVER_URL` to `BACKEND_URL`. All functionality remains identical.
 
 ### 2025-12-03: Fixed MAX_WAIT_TIME Configuration and Benchmark Startup Pattern
 - **Made MAX_WAIT_TIME configurable**: Changed `max_wait_time` field in `lib/backend.py:64-66` to read from environment variable (was previously hardcoded to 10.0)

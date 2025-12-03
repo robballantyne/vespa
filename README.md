@@ -34,7 +34,7 @@ The client handles all Vast.ai routing automatically! See [CLIENT.md](CLIENT.md)
 
 ```bash
 # Required
-export MODEL_SERVER_URL="http://localhost:8000"  # Your backend API
+export BACKEND_URL="http://localhost:8000"  # Your backend API
 export BENCHMARK="benchmarks.openai:benchmark"   # Benchmark function
 
 # Optional
@@ -88,12 +88,12 @@ The **only** custom code is your benchmark function. This tells PyWorker how fas
 ### Benchmark Function Signature
 
 ```python
-async def benchmark(model_url: str, session: ClientSession) -> float:
+async def benchmark(backend_url: str, session: ClientSession) -> float:
     """
     Run performance benchmark.
 
     Args:
-        model_url: Base URL of your backend (e.g., "http://localhost:8000")
+        backend_url: Base URL of your backend (e.g., "http://localhost:8000")
         session: aiohttp ClientSession for making requests
 
     Returns:
@@ -121,7 +121,7 @@ export BENCHMARK="my_module.benchmarks:my_function"
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODEL_SERVER_URL` | Yes | - | Backend API URL (e.g., `http://localhost:8000`) |
+| `BACKEND_URL` | Yes | - | Backend API URL (e.g., `http://localhost:8000`) |
 | `BENCHMARK` | Recommended | None | Python module path to benchmark function (e.g., `benchmarks.openai:benchmark`) |
 | `BACKEND` | No | `generic` | Worker type (use `generic` for new setup) |
 | `HEALTHCHECK_ENDPOINT` | No | `/health` | Health check path - defaults to `/health` if not specified |
@@ -147,7 +147,7 @@ These are set by Vast.ai automatically:
 ### vLLM / Ollama / OpenAI-Compatible
 
 ```bash
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"
 export HEALTHCHECK_ENDPOINT="/health"
@@ -156,7 +156,7 @@ export HEALTHCHECK_ENDPOINT="/health"
 ### Text Generation Inference (TGI)
 
 ```bash
-export MODEL_SERVER_URL="http://localhost:8080"
+export BACKEND_URL="http://localhost:8080"
 export BENCHMARK="benchmarks.openai:benchmark"  # TGI also supports OpenAI format
 export HEALTHCHECK_ENDPOINT="/health"
 ```
@@ -164,7 +164,7 @@ export HEALTHCHECK_ENDPOINT="/health"
 ### Any Custom API
 
 ```bash
-export MODEL_SERVER_URL="http://localhost:5000"
+export BACKEND_URL="http://localhost:5000"
 export BENCHMARK="my_benchmarks:my_api_benchmark"
 export HEALTHCHECK_ENDPOINT="/status"
 export ALLOW_PARALLEL="false"  # If your API doesn't support concurrency
@@ -225,7 +225,7 @@ pyworker/
 pip install -r requirements.txt
 
 # Set env vars
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"  # Skip signature verification for local testing
 
@@ -361,8 +361,8 @@ asyncio.run(test())
 **Error:** `Request error: Cannot connect to host localhost:8000`
 
 **Solution:**
-1. Check `MODEL_SERVER_URL` is correct
-2. Ensure backend is running: `curl $MODEL_SERVER_URL/health`
+1. Check `BACKEND_URL` is correct
+2. Ensure backend is running: `curl $BACKEND_URL/health`
 3. Check firewall/network settings
 
 ## Community & Support

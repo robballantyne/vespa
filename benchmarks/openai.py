@@ -28,12 +28,40 @@ except Exception:
 log = logging.getLogger(__name__)
 
 
-async def benchmark(model_url: str, session: ClientSession, runs: int = 8) -> float:
+def get_test_request() -> tuple[str, dict, float]:
+    """
+    Get a single test request for load testing.
+
+    Returns:
+        tuple: (endpoint_path, payload, workload)
+            - endpoint_path: API endpoint (e.g., "/v1/completions")
+            - payload: Request payload dict
+            - workload: Workload cost (tokens)
+    """
+    model_name = os.environ.get("MODEL_NAME", "model")
+
+    # Generate test prompt
+    prompt = " ".join(random.choices(WORD_LIST, k=250))
+    max_tokens = 500
+
+    endpoint = "/v1/completions"
+    payload = {
+        "model": model_name,
+        "prompt": prompt,
+        "max_tokens": max_tokens,
+        "temperature": 0.7,
+    }
+    workload = max_tokens
+
+    return endpoint, payload, workload
+
+
+async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> float:
     """
     Benchmark an OpenAI-compatible API.
 
     Args:
-        model_url: Base URL of the model server
+        backend_url: Base URL of the backend server
         session: aiohttp ClientSession for making requests
         runs: Number of benchmark runs (default: 8)
 
@@ -41,7 +69,7 @@ async def benchmark(model_url: str, session: ClientSession, runs: int = 8) -> fl
         max_throughput: Maximum workload processed per second
     """
     model_name = os.environ.get("MODEL_NAME", "model")
-    endpoint = f"{model_url}/v1/completions"
+    endpoint = f"{backend_url}/v1/completions"
 
     log.info(f"Benchmarking OpenAI API at {endpoint}")
 

@@ -38,7 +38,7 @@ echo_var SERVER_DIR
 echo_var ENV_PATH
 echo_var DEBUG_LOG
 echo_var VESPA_LOG
-echo "MODEL_SERVER_URL: $MODEL_SERVER_URL"
+echo "BACKEND_URL: $BACKEND_URL"
 echo "BENCHMARK: ${BENCHMARK:-none}"
 
 # if instance is rebooted, we want to clear out the log file so pyworker doesn't read lines
@@ -85,10 +85,10 @@ else
     echo "venv: $VIRTUAL_ENV"
 fi
 
-# Validate MODEL_SERVER_URL is set
-if [ -z "$MODEL_SERVER_URL" ]; then
-    echo "ERROR: MODEL_SERVER_URL must be set!"
-    echo "Example: MODEL_SERVER_URL=http://localhost:8000"
+# Validate BACKEND_URL is set
+if [ -z "$BACKEND_URL" ]; then
+    echo "ERROR: BACKEND_URL must be set!"
+    echo "Example: BACKEND_URL=http://localhost:8000"
     exit 1
 fi
 

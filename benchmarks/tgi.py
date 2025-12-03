@@ -35,19 +35,46 @@ except Exception:
 log = logging.getLogger(__name__)
 
 
-async def benchmark(model_url: str, session: ClientSession, runs: int = 8) -> float:
+def get_test_request() -> tuple[str, dict, float]:
+    """
+    Get a single test request for load testing.
+
+    Returns:
+        tuple: (endpoint_path, payload, workload)
+            - endpoint_path: API endpoint (e.g., "/generate")
+            - payload: Request payload dict
+            - workload: Workload cost (tokens)
+    """
+    # Generate test prompt
+    prompt = " ".join(random.choices(WORD_LIST, k=250))
+    max_new_tokens = 256
+
+    endpoint = "/generate"
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": max_new_tokens,
+            "temperature": 0.7,
+        }
+    }
+    workload = max_new_tokens
+
+    return endpoint, payload, workload
+
+
+async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> float:
     """
     Benchmark TGI API.
 
     Args:
-        model_url: Base URL of the TGI server (e.g., "http://localhost:8080")
+        backend_url: Base URL of the backend server (e.g., "http://localhost:8080")
         session: aiohttp ClientSession for making requests
         runs: Number of benchmark runs (default: 8)
 
     Returns:
         max_throughput: Maximum tokens processed per second
     """
-    endpoint = f"{model_url}/generate"
+    endpoint = f"{backend_url}/generate"
 
     log.info(f"Benchmarking TGI API at {endpoint}")
 

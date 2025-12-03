@@ -56,7 +56,7 @@ class Backend:
     3. Running benchmarks using a custom benchmark function
     """
 
-    model_server_url: str
+    backend_url: str
     benchmark_func: Optional[Callable[[str, ClientSession], Awaitable[float]]]
     healthcheck_endpoint: Optional[str] = None
     allow_parallel_requests: bool = True
@@ -96,10 +96,10 @@ class Backend:
     @cached_property
     def session(self):
         """Main session for forwarding requests to backend API"""
-        log.debug(f"starting session with {self.model_server_url}")
+        log.debug(f"starting session with {self.backend_url}")
         connector = create_tcp_connector(force_close=True)  # Required for long running jobs
         timeout = ClientTimeout(total=None)
-        return ClientSession(self.model_server_url, timeout=timeout, connector=connector)
+        return ClientSession(self.backend_url, timeout=timeout, connector=connector)
 
     def create_handler(self, path: str = None):
         """
@@ -377,7 +377,7 @@ class Backend:
         """Poll healthcheck endpoint until backend is ready or timeout"""
         # Use configured endpoint or default to /health
         endpoint = self.healthcheck_endpoint if self.healthcheck_endpoint else "/health"
-        url = f"{self.model_server_url}{endpoint}"
+        url = f"{self.backend_url}{endpoint}"
 
         log.info(f"Waiting for backend to be ready at {url} (timeout: {self.ready_timeout}s)")
 
@@ -416,7 +416,7 @@ class Backend:
                 continue
             try:
                 log.debug(f"Performing healthcheck on {self.healthcheck_endpoint}")
-                url = f"{self.model_server_url}{self.healthcheck_endpoint}"
+                url = f"{self.backend_url}{self.healthcheck_endpoint}"
                 async with self.healthcheck_session.get(url) as response:
                     if response.status == 200:
                         log.debug("Healthcheck successful")
@@ -471,7 +471,7 @@ class Backend:
             try:
                 log.debug("Running benchmark...")
                 max_throughput = await self.benchmark_func(
-                    self.model_server_url,
+                    self.backend_url,
                     self.session
                 )
                 log.debug(f"Benchmark completed: {max_throughput} workload/s")

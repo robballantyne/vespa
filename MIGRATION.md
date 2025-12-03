@@ -48,7 +48,7 @@ pyworker/
 # Total: ~250 lines of custom code
 
 export BACKEND="openai"
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export MODEL_LOG="/path/to/model.log"
 export HF_TOKEN="..."
 ```
@@ -58,7 +58,7 @@ export HF_TOKEN="..."
 # No custom worker needed!
 # Just 2 environment variables
 
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"  # Optional
 ```
@@ -81,7 +81,7 @@ export MODEL_NAME="meta-llama/Llama-2-7b-hf"  # Optional
 # Total: ~200 lines of custom code
 
 export BACKEND="tgi"
-export MODEL_SERVER_URL="http://localhost:8080"
+export BACKEND_URL="http://localhost:8080"
 export MODEL_LOG="/path/to/model.log"
 export HF_TOKEN="..."
 ```
@@ -90,7 +90,7 @@ export HF_TOKEN="..."
 ```bash
 # No custom worker needed!
 
-export MODEL_SERVER_URL="http://localhost:8080"
+export BACKEND_URL="http://localhost:8080"
 export BENCHMARK="benchmarks.tgi:benchmark"
 ```
 
@@ -111,7 +111,7 @@ export BENCHMARK="benchmarks.tgi:benchmark"
 # Total: ~400 lines of custom code
 
 export BACKEND="comfyui"
-export MODEL_SERVER_URL="http://localhost:8188"
+export BACKEND_URL="http://localhost:8188"
 export MODEL_LOG="/path/to/comfyui.log"
 export COMFY_MODEL="model.safetensors"
 ```
@@ -120,7 +120,7 @@ export COMFY_MODEL="model.safetensors"
 ```bash
 # No custom worker needed!
 
-export MODEL_SERVER_URL="http://localhost:8188"
+export BACKEND_URL="http://localhost:8188"
 export BENCHMARK="benchmarks.comfyui:benchmark"
 export ALLOW_PARALLEL="false"  # ComfyUI doesn't handle concurrency well
 ```
@@ -254,7 +254,7 @@ The autoscaler calculates workload before routing the request. PyWorker just use
 **New approach:**
 ```python
 # benchmarks/openai.py
-async def benchmark(model_url: str, session: ClientSession) -> float:
+async def benchmark(backend_url: str, session: ClientSession) -> float:
     # Run benchmark
     # Return max throughput
     return max_throughput
@@ -276,7 +276,7 @@ async def benchmark(model_url: str, session: ClientSession) -> float:
 |-----|-----|-------|
 | `BACKEND` | - | Defaults to `generic`, no longer needed |
 | `MODEL_LOG` | - | No log tailing, no longer needed |
-| - | `MODEL_SERVER_URL` | Still required (was required before too) |
+| - | `BACKEND_URL` | Still required (was required before too) |
 | - | `BENCHMARK` | New: points to benchmark function |
 
 ### Optional (New)
@@ -330,7 +330,7 @@ env | grep -E "BACKEND|MODEL_|COMFY_|HF_" > old_config.env
 unset BACKEND MODEL_LOG COMFY_MODEL
 
 # Set new variables
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 ```
 
@@ -374,7 +374,7 @@ Look for:
 
 Update your Vast.ai template with new environment variables:
 ```bash
-MODEL_SERVER_URL=http://localhost:8000
+BACKEND_URL=http://localhost:8000
 BENCHMARK=benchmarks.openai:benchmark
 ```
 
@@ -425,7 +425,7 @@ source old_config.env
 ```bash
 # Create benchmark
 cat > benchmarks/myapi.py << 'EOF'
-async def benchmark(model_url, session):
+async def benchmark(backend_url, session):
     # Your benchmark logic
     return max_throughput
 EOF

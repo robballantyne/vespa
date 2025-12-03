@@ -62,12 +62,106 @@ def calculate_workload(width: int, height: int, steps: int) -> float:
     return workload
 
 
-async def benchmark(model_url: str, session: ClientSession, runs: int = 3) -> float:
+def get_test_request() -> tuple[str, dict, float]:
+    """
+    Get a single test request for load testing.
+
+    Returns:
+        tuple: (endpoint_path, payload, workload)
+            - endpoint_path: API endpoint (e.g., "/runsync")
+            - payload: Request payload dict
+            - workload: Workload cost (resolution * steps / 1000)
+    """
+    # Standard test parameters
+    width = 512
+    height = 512
+    steps = 20
+    cfg = 7.0
+    sampler_name = "euler_ancestral"
+    scheduler = "normal"
+
+    # Random prompt and seed
+    prompt = random.choice(TEST_PROMPTS)
+    seed = random.randint(1, 1000000)
+
+    # Simple workflow for testing
+    workflow = {
+        "3": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": 1,
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0]
+            },
+            "class_type": "KSampler"
+        },
+        "4": {
+            "inputs": {
+                "ckpt_name": "model.safetensors"
+            },
+            "class_type": "CheckpointLoaderSimple"
+        },
+        "5": {
+            "inputs": {
+                "width": width,
+                "height": height,
+                "batch_size": 1
+            },
+            "class_type": "EmptyLatentImage"
+        },
+        "6": {
+            "inputs": {
+                "text": prompt,
+                "clip": ["4", 1]
+            },
+            "class_type": "CLIPTextEncode"
+        },
+        "7": {
+            "inputs": {
+                "text": "nsfw, nude, text, watermark",
+                "clip": ["4", 1]
+            },
+            "class_type": "CLIPTextEncode"
+        },
+        "8": {
+            "inputs": {
+                "samples": ["3", 0],
+                "vae": ["4", 2]
+            },
+            "class_type": "VAEDecode"
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": "ComfyUI",
+                "images": ["8", 0]
+            },
+            "class_type": "SaveImage"
+        }
+    }
+
+    endpoint = "/runsync"
+    payload = {
+        "input": {
+            "workflow_json": workflow
+        }
+    }
+    workload = calculate_workload(width, height, steps)
+
+    return endpoint, payload, workload
+
+
+async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> float:
     """
     Benchmark ComfyUI API.
 
     Args:
-        model_url: Base URL of the ComfyUI server (e.g., "http://localhost:8188")
+        backend_url: Base URL of the backend server (e.g., "http://localhost:8188")
         session: aiohttp ClientSession for making requests
         runs: Number of benchmark runs (default: 3, fewer because image gen is slow)
 
@@ -75,7 +169,7 @@ async def benchmark(model_url: str, session: ClientSession, runs: int = 3) -> fl
         max_throughput: Maximum workload units processed per second
     """
     # ComfyUI typically uses port 8188 and has /runsync endpoint for synchronous execution
-    endpoint = f"{model_url}/runsync"
+    endpoint = f"{backend_url}/runsync"
 
     log.info(f"Benchmarking ComfyUI API at {endpoint}")
 

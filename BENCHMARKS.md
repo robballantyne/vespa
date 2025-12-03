@@ -10,7 +10,7 @@ This directory contains benchmark functions for different backend types. Each be
 
 **Usage:**
 ```bash
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"
 ```
@@ -42,7 +42,7 @@ POST /v1/completions
 
 **Usage:**
 ```bash
-export MODEL_SERVER_URL="http://localhost:8080"
+export BACKEND_URL="http://localhost:8080"
 export BENCHMARK="benchmarks.tgi:benchmark"
 ```
 
@@ -74,7 +74,7 @@ POST /generate
 
 **Usage:**
 ```bash
-export MODEL_SERVER_URL="http://localhost:8188"
+export BACKEND_URL="http://localhost:8188"
 export BENCHMARK="benchmarks.comfyui:benchmark"
 ```
 
@@ -130,18 +130,18 @@ from aiohttp import ClientSession
 log = logging.getLogger(__name__)
 
 
-async def benchmark(model_url: str, session: ClientSession) -> float:
+async def benchmark(backend_url: str, session: ClientSession) -> float:
     """
     Benchmark My API.
 
     Args:
-        model_url: Base URL of the backend (e.g., "http://localhost:8000")
+        backend_url: Base URL of the backend (e.g., "http://localhost:8000")
         session: aiohttp ClientSession for making requests
 
     Returns:
         max_throughput: Maximum workload units processed per second
     """
-    endpoint = f"{model_url}/my-endpoint"
+    endpoint = f"{backend_url}/my-endpoint"
 
     # 1. Warmup (optional but recommended)
     log.info("Warming up...")
@@ -187,7 +187,26 @@ async def benchmark(model_url: str, session: ClientSession) -> float:
     return max_throughput if max_throughput > 0 else 1.0
 ```
 
-### 3. Use Your Benchmark
+### 3. Add Load Test Support (Optional but Recommended)
+
+Add a `get_test_request()` function to enable load testing with your benchmark:
+
+```python
+def get_test_request() -> tuple[str, dict, float]:
+    """
+    Get a single test request for load testing.
+
+    Returns:
+        tuple: (endpoint_path, payload, workload)
+    """
+    endpoint = "/my-endpoint"
+    payload = {"your": "data"}
+    workload = 100  # Same workload unit as benchmark
+
+    return endpoint, payload, workload
+```
+
+### 4. Use Your Benchmark
 
 ```bash
 export BENCHMARK="benchmarks.myapi:benchmark"
@@ -241,13 +260,99 @@ Or test through PyWorker:
 # ...
 
 # Start PyWorker
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"
 python -m workers.generic.server
 
 # Watch logs for benchmark results
 ```
+
+---
+
+## Load Testing with Benchmarks
+
+Each benchmark module exports a `get_test_request()` function that provides test payloads for load testing. This ensures your load tests use the same workload patterns as benchmarking.
+
+### Using the Load Test Script
+
+```bash
+python -m lib.test_utils \
+  -k YOUR_API_KEY \
+  -e my-endpoint \
+  -b benchmarks.openai \
+  -n 100 \
+  -rps 10
+```
+
+**Parameters:**
+- `-k`: Your Vast.ai account API key
+- `-e`: Endpoint group name
+- `-b`: Benchmark module to use (benchmarks.openai, benchmarks.tgi, benchmarks.comfyui)
+- `-n`: Total number of requests to send
+- `-rps`: Requests per second
+- `-i`: Instance (prod, alpha, candidate, local) - optional, defaults to prod
+
+**Example: Load test OpenAI endpoint**
+```bash
+export MODEL_NAME="llama-2-7b"
+python -m lib.test_utils \
+  -k YOUR_KEY \
+  -e llama-endpoint \
+  -b benchmarks.openai \
+  -n 50 \
+  -rps 5
+```
+
+**Example: Load test TGI endpoint**
+```bash
+python -m lib.test_utils \
+  -k YOUR_KEY \
+  -e tgi-endpoint \
+  -b benchmarks.tgi \
+  -n 30 \
+  -rps 3
+```
+
+**Example: Load test ComfyUI endpoint**
+```bash
+python -m lib.test_utils \
+  -k YOUR_KEY \
+  -e comfy-endpoint \
+  -b benchmarks.comfyui \
+  -n 10 \
+  -rps 1
+```
+
+### Adding Load Test Support to Custom Benchmarks
+
+When creating a custom benchmark, add a `get_test_request()` function:
+
+```python
+def get_test_request() -> tuple[str, dict, float]:
+    """
+    Get a single test request for load testing.
+
+    Returns:
+        tuple: (endpoint_path, payload, workload)
+            - endpoint_path: API endpoint (e.g., "/my-endpoint")
+            - payload: Request payload dict
+            - workload: Workload cost (e.g., tokens, compute units)
+    """
+    endpoint = "/my-endpoint"
+    payload = {
+        "data": "test",
+        "size": 100,
+    }
+    workload = 100  # Match your benchmark's workload units
+
+    return endpoint, payload, workload
+```
+
+This ensures:
+1. **Consistency**: Load tests use the same payloads as benchmarks
+2. **No duplication**: Don't need separate test payload generation
+3. **Correct workload**: Autoscaler gets accurate cost estimates
 
 ---
 
@@ -258,8 +363,8 @@ python -m workers.generic.server
 **Problem:** Benchmark returns 1.0 without running
 
 **Solutions:**
-1. Check `MODEL_SERVER_URL` is correct
-2. Verify backend is running: `curl $MODEL_SERVER_URL/health`
+1. Check `BACKEND_URL` is correct
+2. Verify backend is running: `curl $BACKEND_URL/health`
 3. Check endpoint path (e.g., `/v1/completions` vs `/completions`)
 4. Review logs for connection errors
 
@@ -290,7 +395,7 @@ python -m workers.generic.server
 **Solutions:**
 1. Check API format matches backend expectations
 2. Verify authentication/API keys if required
-3. Test endpoint manually: `curl -X POST $MODEL_SERVER_URL/endpoint -d '...'`
+3. Test endpoint manually: `curl -X POST $BACKEND_URL/endpoint -d '...'`
 4. Check backend logs for errors
 
 ---
@@ -316,7 +421,7 @@ python server.py
 
 When adding a new benchmark:
 
-1. Follow the function signature: `async def benchmark(model_url: str, session: ClientSession) -> float`
+1. Follow the function signature: `async def benchmark(backend_url: str, session: ClientSession) -> float`
 2. Add comprehensive docstring with usage and API format
 3. Include error handling and fallback to 1.0
 4. Test with real backend before submitting

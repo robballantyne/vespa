@@ -52,7 +52,7 @@ The worker entry point. Loads configuration from environment variables and start
 
 **Usage:**
 ```bash
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 python server.py
 ```
@@ -139,13 +139,13 @@ Simple aiohttp server setup. Minimal and unchanged.
 User-written benchmark functions. **This is the only custom code needed per backend.**
 
 Each benchmark:
-- Takes `model_url` and `session` as parameters
+- Takes `backend_url` and `session` as parameters
 - Sends test requests to measure throughput
 - Returns maximum throughput in workload units/second
 
 **Example:**
 ```python
-async def benchmark(model_url: str, session: ClientSession) -> float:
+async def benchmark(backend_url: str, session: ClientSession) -> float:
     # Run 8 iterations of benchmark
     # Return max throughput
     return max_throughput
@@ -247,7 +247,7 @@ pyworker/
 1. Create `benchmarks/myapi.py`
 2. Write one function:
    ```python
-   async def benchmark(model_url, session):
+   async def benchmark(backend_url, session):
        # Your benchmark logic
        return max_throughput
    ```
@@ -260,7 +260,7 @@ pyworker/
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `MODEL_SERVER_URL` | Backend API URL | `http://localhost:8000` |
+| `BACKEND_URL` | Backend API URL | `http://localhost:8000` |
 | `BENCHMARK` | Benchmark module path | `benchmarks.openai:benchmark` |
 
 ### Optional
@@ -333,7 +333,7 @@ pyworker/
 pip install -r requirements.txt
 
 # Set environment
-export MODEL_SERVER_URL="http://localhost:8000"
+export BACKEND_URL="http://localhost:8000"
 export BENCHMARK="benchmarks.openai:benchmark"
 export UNSECURED="true"
 
