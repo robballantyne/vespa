@@ -150,10 +150,11 @@ gather(
 ```
 
 **Background tasks** (`_start_tracking`):
-- `__run_benchmark_on_startup()`: Wait for ready, run benchmark once
-- `metrics._send_metrics_loop()`: Report metrics every 1s
-- `__healthcheck()`: Monitor backend health every 10s
-- `metrics._send_delete_requests_loop()`: Clean up completed requests
+- Runs `__run_benchmark_on_startup()` first to completion (wait for ready, run benchmark once)
+- Then starts infinite background loops:
+  - `metrics._send_metrics_loop()`: Report metrics every 1s
+  - `__healthcheck()`: Monitor backend health every 10s
+  - `metrics._send_delete_requests_loop()`: Clean up completed requests
 
 ## Environment Variables
 
@@ -452,12 +453,24 @@ vespa/
 
 ## Recent Changes Log
 
+### 2025-12-03: Fixed MAX_WAIT_TIME Configuration and Benchmark Startup Pattern
+- **Made MAX_WAIT_TIME configurable**: Changed `max_wait_time` field in `lib/backend.py:64-66` to read from environment variable (was previously hardcoded to 10.0)
+- **Fixed benchmark startup pattern**: Removed unnecessary infinite sleep loop from `__run_benchmark_on_startup()` (`lib/backend.py:448-486`)
+  - Benchmark now completes and exits cleanly instead of sleeping forever
+  - Removed unused `BENCHMARK_SLEEP_INTERVAL` constant
+- **Refactored `_start_tracking()`**: Changed from running benchmark in `gather()` with background tasks to sequential execution (`lib/backend.py:435-445`)
+  - Now runs benchmark first to completion
+  - Then starts infinite background loops (metrics, healthcheck, delete requests)
+  - More logical flow: wait for backend ready → benchmark → start monitoring
+
+**Impact**: Cleaner startup pattern that doesn't waste a coroutine sleeping indefinitely. MAX_WAIT_TIME now properly configurable as documented.
+
 ### 2025-12-03: Major Code Refactoring and Simplification
 - **Logging Configuration**: Added `LOG_LEVEL` environment variable support (default: INFO) in `server.py:26-31`
 - **Removed Deprecated Code**: Removed `distutils.util.strtobool` (deprecated), replaced with simple string comparison
 - **Fixed Missing Import**: Added `Union` type import to `lib/data_types.py:5`
 - **Extracted Magic Numbers**: Created constants at top of files for all magic numbers:
-  - `lib/backend.py:30-38`: Added `HEALTHCHECK_RETRY_INTERVAL`, `HEALTHCHECK_POLL_INTERVAL`, `HEALTHCHECK_TIMEOUT`, `PUBKEY_FETCH_TIMEOUT`, `METRICS_RETRY_DELAY`, `BENCHMARK_SLEEP_INTERVAL`
+  - `lib/backend.py:30-37`: Added `HEALTHCHECK_RETRY_INTERVAL`, `HEALTHCHECK_POLL_INTERVAL`, `HEALTHCHECK_TIMEOUT`, `PUBKEY_FETCH_TIMEOUT`, `METRICS_RETRY_DELAY`
   - `lib/metrics.py:14-17`: Added `METRICS_UPDATE_INTERVAL`, `DELETE_REQUESTS_INTERVAL`, `METRICS_RETRY_DELAY`, `METRICS_MAX_RETRIES`
 - **DRY TCPConnector**: Created `create_tcp_connector()` helper function (`lib/backend.py:41-46`) to eliminate duplicate connector configuration
 - **Simplified HTTP Method Dispatch**: Replaced if/elif chain with dictionary-based dispatch (`lib/backend.py:280-291`)

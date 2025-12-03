@@ -35,7 +35,6 @@ HEALTHCHECK_POLL_INTERVAL = 10  # seconds between periodic healthchecks
 HEALTHCHECK_TIMEOUT = 10  # seconds for healthcheck requests
 PUBKEY_FETCH_TIMEOUT = 10  # seconds for pubkey fetch
 METRICS_RETRY_DELAY = 2  # seconds between metrics retry attempts
-BENCHMARK_SLEEP_INTERVAL = 3600  # seconds to sleep after benchmark complete
 
 
 def create_tcp_connector(force_close: bool = True) -> TCPConnector:
@@ -61,7 +60,9 @@ class Backend:
     benchmark_func: Optional[Callable[[str, ClientSession], Awaitable[float]]]
     healthcheck_endpoint: Optional[str] = None
     allow_parallel_requests: bool = True
-    max_wait_time: float = 10.0
+    max_wait_time: float = dataclasses.field(
+        default_factory=lambda: float(os.environ.get("MAX_WAIT_TIME", "10.0"))
+    )
     ready_timeout: int = dataclasses.field(
         default_factory=lambda: int(os.environ.get("READY_TIMEOUT", "1200"))
     )
@@ -431,9 +432,12 @@ class Backend:
                 self.backend_errored(str(e))
 
     async def _start_tracking(self) -> None:
-        """Start background tasks for metrics and healthcheck"""
+        """Run benchmark, then start background tasks for metrics and healthcheck"""
+        # Run benchmark first to completion
+        await self.__run_benchmark_on_startup()
+
+        # Then start infinite background loops
         await gather(
-            self.__run_benchmark_on_startup(),
             self.metrics._send_metrics_loop(),
             self.__healthcheck(),
             self.metrics._send_delete_requests_loop()
@@ -443,7 +447,7 @@ class Backend:
         """Mark backend as errored"""
         self.metrics._model_errored(msg)
 
-    async def __run_benchmark_on_startup(self) -> NoReturn:
+    async def __run_benchmark_on_startup(self) -> None:
         """Run benchmark on startup to determine max throughput"""
 
         # Check if benchmark already completed
@@ -453,9 +457,6 @@ class Backend:
                 log.debug(f"Benchmark already completed: {max_throughput} workload/s")
                 self.metrics._model_loaded(max_throughput=max_throughput)
                 self.__start_healthcheck = True
-                # Keep running to handle healthchecks
-                while True:
-                    await sleep(BENCHMARK_SLEEP_INTERVAL)
                 return
         except FileNotFoundError:
             pass
@@ -485,10 +486,6 @@ class Backend:
 
         self.metrics._model_loaded(max_throughput=max_throughput)
         self.__start_healthcheck = True
-
-        # Keep running
-        while True:
-            await sleep(BENCHMARK_SLEEP_INTERVAL)
 
     def __verify_signature(self, message: str, signature: str) -> bool:
         """Verify PKCS#1 signature"""
