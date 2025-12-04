@@ -639,6 +639,7 @@ class Backend:
         if self.unsecured is True:
             return True
 
+        # Include all auth_data fields except signature (matching autoscaler behavior)
         auth_data_dict = {
             "cost": auth_data.cost,
             "endpoint": auth_data.endpoint,
@@ -647,7 +648,8 @@ class Backend:
             "url": auth_data.url,
         }
 
-        message = json.dumps(auth_data_dict, sort_keys=True)
+        # IMPORTANT: Must use indent=4 to match autoscaler's JSON formatting
+        message = json.dumps(auth_data_dict, indent=4, sort_keys=True)
         log.debug(f"Verifying signature for message: {message}")
         log.debug(f"Signature: {auth_data.signature[:20]}..." if len(auth_data.signature) > 20 else f"Signature: {auth_data.signature}")
         result = self.__verify_signature(message, auth_data.signature)
