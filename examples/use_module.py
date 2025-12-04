@@ -14,7 +14,7 @@ client = VastClient(
     api_key="YOUR_ENDPOINT_API_KEY",  # Or set VAST_API_KEY env var
 )
 
-# Example 1: Simple completion
+# Example 1: Simple completion (default workload=1.0)
 response = client.post(
     "/v1/completions",
     json={
@@ -59,12 +59,36 @@ for chunk in response.iter_content(chunk_size=None):
         print(chunk.decode(), end="", flush=True)
 print()
 
-# Example 4: GET request
+# Example 4: Specifying workload cost
+response = client.post(
+    "/v1/completions",
+    json={
+        "model": "llama-2-7b",
+        "prompt": "Write a long essay about AI",
+        "max_tokens": 2000,
+    },
+    workload=500.0,  # Specify expected workload units
+)
+print("High-cost completion:", response.status_code)
+
+# Example 5: Workload via header
+response = client.post(
+    "/v1/completions",
+    json={
+        "model": "llama-2-7b",
+        "prompt": "Quick response",
+        "max_tokens": 10,
+    },
+    headers={"X-Vast-Cost": "5"},  # Can also specify via header
+)
+print("Low-cost completion:", response.status_code)
+
+# Example 6: GET request
 response = client.get("/health")
 print("Health:", response.text)
 
 # The client handles all Vast.ai routing automatically:
 # - Calls /route/ to get worker assignment
 # - Wraps request in auth_data + payload
-# - Auto-detects workload from max_tokens, max_new_tokens, or steps
+# - Uses workload parameter, X-Vast-Cost header, or defaults to 1.0
 # - Returns standard requests.Response object

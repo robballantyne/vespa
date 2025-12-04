@@ -17,9 +17,20 @@ Usage as a module:
     from client import VastClient
 
     client = VastClient(endpoint_name="my-endpoint", api_key="YOUR_KEY")
-    response = client.post("/v1/completions", json={"prompt": "test"})
+
+    # Specify cost via workload parameter
+    response = client.post("/v1/completions", json={"prompt": "test"}, workload=100.0)
+
+    # Or via X-Vast-Cost header
+    response = client.post("/v1/completions", json={"prompt": "test"},
+                          headers={"X-Vast-Cost": "100"})
 
 Then just point your app at localhost:8010 instead of the real API!
+
+Workload/Cost:
+- Specify via workload parameter or X-Vast-Cost header
+- Used for routing and queue estimation
+- Defaults to 1.0 if not specified
 """
 import argparse
 import logging
@@ -120,7 +131,7 @@ class VastClient:
         json: Optional[Dict[str, Any]] = None,
         data: Optional[bytes] = None,
         headers: Optional[Dict[str, str]] = None,
-        workload: Optional[float] = 1.0,
+        workload: Optional[float] = None,
         stream: bool = False,
     ) -> requests.Response:
         """
@@ -132,23 +143,26 @@ class VastClient:
             json: JSON payload (optional)
             data: Raw data payload (optional)
             headers: Additional headers (optional)
-            workload: Estimated workload units (auto-detected from json if not provided)
+            workload: Workload units (cost). If not specified, checks X-Vast-Cost header, defaults to 1.0
             stream: Stream response (default: False)
 
         Returns:
             requests.Response object
         """
-        # Auto-detect workload from common fields
-        if workload is None and json:
-            workload = (
-                json.get("max_tokens", 0)
-                or json.get("max_new_tokens", 0)
-                or json.get("steps", 0)
-                or 1.0
-            )
+        # Extract workload from X-Vast-Cost header if not explicitly provided
+        if workload is None and headers and "X-Vast-Cost" in headers:
+            try:
+                workload = float(headers["X-Vast-Cost"])
+            except (ValueError, TypeError):
+                log.warning(f"Invalid X-Vast-Cost header value: {headers['X-Vast-Cost']}, using default 1.0")
+                workload = 1.0
+
+        # Default to 1.0 if still not set
+        if workload is None:
+            workload = 1.0
 
         # Get worker assignment
-        routing_info = self.route(workload or 1.0)
+        routing_info = self.route(workload)
         if not routing_info:
             raise Exception(
                 "Failed to get worker assignment from autoscaler\n"
@@ -284,6 +298,15 @@ class VastProxy:
         log.info(f"{method} {path}")
 
         try:
+            # Extract workload from X-Vast-Cost header if present
+            workload = None
+            if "X-Vast-Cost" in request.headers:
+                try:
+                    workload = float(request.headers["X-Vast-Cost"])
+                    log.debug(f"Using workload from X-Vast-Cost header: {workload}")
+                except (ValueError, TypeError):
+                    log.warning(f"Invalid X-Vast-Cost header: {request.headers['X-Vast-Cost']}")
+
             # Read request body
             if request.can_read_body:
                 body_bytes = await request.read()
@@ -302,6 +325,7 @@ class VastProxy:
                 json=json_data,
                 data=body_bytes if not json_data else None,
                 headers=dict(request.headers),
+                workload=workload,
             )
 
             # Return response
