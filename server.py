@@ -98,10 +98,11 @@ async def handle_ping(_):
 
 
 # Create catch-all route that forwards any path to the backend
-# The actual endpoint is specified in auth_data.endpoint
+# The actual backend endpoint path comes from the HTTP request path
+# auth_data.endpoint contains the Vast endpoint name (for signature verification only)
 routes = [
     # Catch-all route for all HTTP methods
-    # The endpoint path comes from auth_data.endpoint in the request
+    # Forwards request.path to the backend API
     web.post("/{path:.*}", backend.create_handler()),
     web.get("/{path:.*}", backend.create_handler()),
     web.put("/{path:.*}", backend.create_handler()),

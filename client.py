@@ -174,17 +174,20 @@ class VastClient:
             )
 
         # Construct request to worker
+        # IMPORTANT: Use the exact values from routing_info that were signed by the autoscaler
+        # Do NOT modify these values or signature verification will fail
         worker_url = routing_info["url"]
         auth_data = {
             "cost": str(routing_info.get("cost", workload)),
-            "endpoint": path,
+            "endpoint": routing_info.get("endpoint", self.endpoint_name),  # Must match what was signed
             "reqnum": routing_info.get("reqnum", 0),
             "request_idx": routing_info.get("request_idx", 0),
             "signature": routing_info.get("signature", ""),
             "url": worker_url,
         }
 
-        log.debug(auth_data)
+        log.debug(f"Auth data for signature verification: {auth_data}")
+        log.debug(f"Request path: {path}")
 
         # Handle GET/DELETE/HEAD differently (no body, use query params)
         if method in ["GET", "DELETE", "HEAD"]:

@@ -215,7 +215,8 @@ class Backend:
         """Forward request to backend and return response"""
         try:
             # Determine endpoint to use
-            endpoint = target_path if target_path else auth_data.endpoint
+            # Priority: explicit target_path > HTTP request path > auth_data.endpoint (for backward compat)
+            endpoint = target_path if target_path else (request.path if request.path else auth_data.endpoint)
 
             # Forward request to backend
             response = await self.__call_api(
