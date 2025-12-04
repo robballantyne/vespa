@@ -585,20 +585,27 @@ class Backend:
         else:
             # No cache, need to run benchmark
             if self.benchmark_func is None:
-                log.warning("No benchmark function provided, using default throughput of 1.0")
-                max_throughput = 1.0
-            else:
-                try:
-                    log.debug("Running benchmark...")
-                    max_throughput = await self.benchmark_func(
-                        self.backend_url,
-                        self.session
-                    )
-                    log.debug(f"Benchmark completed: {max_throughput} workload/s")
-                except Exception as e:
-                    log.error(f"Benchmark failed: {e}")
-                    self.backend_errored(f"Benchmark failed: {e}")
-                    max_throughput = 1.0
+                error_msg = (
+                    "No benchmark function provided. "
+                    "Set VESPA_BENCHMARK environment variable to specify benchmark function. "
+                    "Example: VESPA_BENCHMARK=benchmarks.openai:benchmark"
+                )
+                log.error(error_msg)
+                self.backend_errored(error_msg)
+                raise RuntimeError(error_msg)
+
+            try:
+                log.debug("Running benchmark...")
+                max_throughput = await self.benchmark_func(
+                    self.backend_url,
+                    self.session
+                )
+                log.debug(f"Benchmark completed: {max_throughput} workload/s")
+            except Exception as e:
+                error_msg = f"Benchmark failed: {e}"
+                log.error(error_msg)
+                self.backend_errored(error_msg)
+                raise RuntimeError(error_msg) from e
 
             # Save benchmark result to cache
             with open(BENCHMARK_INDICATOR_FILE, "w") as f:
@@ -666,10 +673,15 @@ class Backend:
             return RSA.import_key(pubkey_str)
         except Exception as e:
             self._total_pubkey_fetch_errors += 1
-            log.debug(f"Failed to fetch pubkey (attempt {self._total_pubkey_fetch_errors}): {e}")
+            log.error(f"Failed to fetch pubkey (attempt {self._total_pubkey_fetch_errors}/{MAX_PUBKEY_FETCH_ATTEMPTS}): {e}")
 
             if self._total_pubkey_fetch_errors >= MAX_PUBKEY_FETCH_ATTEMPTS:
-                log.error("Max pubkey fetch attempts reached, running in unsecured mode")
-                self.unsecured = True
+                error_msg = (
+                    f"Failed to fetch public key after {MAX_PUBKEY_FETCH_ATTEMPTS} attempts. "
+                    f"Cannot verify request signatures. "
+                    f"Set VESPA_UNSECURED=true for local development only."
+                )
+                log.error(error_msg)
+                raise RuntimeError(error_msg)
 
             return None

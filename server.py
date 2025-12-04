@@ -17,7 +17,7 @@ Usage:
 import os
 import logging
 import importlib
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, cast
 from aiohttp import web, ClientSession
 from lib.backend import Backend
 from lib.server import start_server
@@ -47,7 +47,8 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
     benchmark_spec = os.environ.get("VESPA_BENCHMARK")
 
     if not benchmark_spec:
-        log.warning("No VESPA_BENCHMARK env var set, will use default throughput of 1.0")
+        log.warning("No VESPA_BENCHMARK env var set, worker will error on startup")
+        log.warning("Set VESPA_BENCHMARK to specify benchmark function (e.g., benchmarks.openai:benchmark)")
         return None
 
     try:
@@ -65,11 +66,12 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
             raise ValueError(f"Benchmark {benchmark_spec} is not callable")
 
         log.debug(f"Successfully loaded benchmark function: {benchmark_spec}")
-        return benchmark_func
+        # Cast to expected type since we can't verify signature at import time
+        return cast(Callable[[str, ClientSession], Awaitable[float]], benchmark_func)
 
     except Exception as e:
         log.error(f"Failed to load benchmark function '{benchmark_spec}': {e}")
-        log.warning("Will use default throughput of 1.0")
+        log.error("Worker will error on startup without valid benchmark function")
         return None
 
 
@@ -118,6 +120,6 @@ if __name__ == "__main__":
     log.info(f"Healthcheck endpoint: {healthcheck_endpoint or 'None'}")
     log.info(f"Allow parallel requests: {allow_parallel}")
     log.info(f"Max wait time: {max_wait_time}s")
-    log.info(f"Benchmark: {os.environ.get('VESPA_BENCHMARK', 'None (will use default)')}")
+    log.info(f"Benchmark: {os.environ.get('VESPA_BENCHMARK', 'None (worker will error on startup)')}")
 
     start_server(backend, routes)
