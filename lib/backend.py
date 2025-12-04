@@ -140,8 +140,12 @@ class Backend:
                 if has_auth_params:
                     # Parse auth_data from query parameters
                     try:
+                        # Query params are strings, but cost must be numeric to match signature
+                        cost_str = query_params.get("serverless_cost", "1.0")
+                        cost = float(cost_str) if '.' in cost_str else int(cost_str)
+
                         auth_data = AuthData(
-                            cost=query_params.get("serverless_cost", "1.0"),
+                            cost=cost,  # Convert to number to match autoscaler's signature
                             endpoint=query_params.get("serverless_endpoint", request.path),
                             reqnum=int(query_params.get("serverless_reqnum", 0)),
                             request_idx=int(query_params.get("serverless_request_idx", 0)),
@@ -173,7 +177,7 @@ class Backend:
                 if self.unsecured:
                     # In unsecured mode, create minimal auth_data
                     auth_data = AuthData(
-                        cost="1.0",
+                        cost=1.0,  # Use number for consistency
                         endpoint=request.path,
                         reqnum=0,
                         request_idx=0,
@@ -337,7 +341,7 @@ class Backend:
             log.debug("Passthrough mode: treating entire request as payload")
             # Create minimal auth_data for metrics tracking
             auth_data = AuthData(
-                cost="1.0",  # Default workload
+                cost=1.0,  # Default workload (numeric for signature consistency)
                 endpoint=request_path,
                 reqnum=0,
                 request_idx=0,
