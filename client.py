@@ -32,7 +32,7 @@ from aiohttp import web
 import asyncio
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -69,7 +69,7 @@ class VastClient:
 
         log.debug(f"Initialized VastClient for endpoint: {endpoint_name}")
 
-    def route(self, endpoint: str, workload: float = 1.0) -> Optional[Dict[str, Any]]:
+    def route(self, workload: float = 1.0) -> Optional[Dict[str, Any]]:
         """
         Call /route/ to get worker assignment.
 
@@ -80,11 +80,12 @@ class VastClient:
         Returns:
             Dict with worker URL, signature, and routing info
         """
+
         try:
             response = requests.post(
                 f"{self.autoscaler_url}/route/",
                 json={
-                    "endpoint": endpoint,
+                    "endpoint": self.endpoint_name,
                     "cost": workload,
                 },
                 headers={
@@ -119,7 +120,7 @@ class VastClient:
         json: Optional[Dict[str, Any]] = None,
         data: Optional[bytes] = None,
         headers: Optional[Dict[str, str]] = None,
-        workload: Optional[float] = None,
+        workload: Optional[float] = 1.0,
         stream: bool = False,
     ) -> requests.Response:
         """
@@ -147,7 +148,7 @@ class VastClient:
             )
 
         # Get worker assignment
-        routing_info = self.route(path, workload or 1.0)
+        routing_info = self.route(workload or 1.0)
         if not routing_info:
             raise Exception(
                 "Failed to get worker assignment from autoscaler\n"
@@ -169,11 +170,22 @@ class VastClient:
             "url": worker_url,
         }
 
+        log.debug(auth_data)
+
         # Handle GET/DELETE/HEAD differently (no body, use query params)
         if method in ["GET", "DELETE", "HEAD"]:
             # Encode auth_data as query parameters (prefixed with serverless_ to avoid conflicts)
-            from urllib.parse import urlencode
+            from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
+            # Parse path to separate base path from existing query parameters
+            parsed = urlparse(path)
+            base_path = parsed.path
+            existing_params = parse_qs(parsed.query, keep_blank_values=True)
+
+            # Flatten existing params (parse_qs returns lists)
+            flat_existing = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
+
+            # Serverless auth params (prefixed to avoid conflicts)
             query_params = {
                 "serverless_cost": auth_data["cost"],
                 "serverless_endpoint": auth_data["endpoint"],
@@ -183,12 +195,15 @@ class VastClient:
                 "serverless_url": auth_data["url"],
             }
 
+            # Add existing query params from path (unprefixed - these go to backend)
+            query_params.update(flat_existing)
+
             # Add payload fields as additional query params (unprefixed - these go to backend)
             if json:
                 query_params.update(json)
 
             # Build full URL with query params
-            full_url = f"{worker_url}{path}?{urlencode(query_params)}"
+            full_url = f"{worker_url}{base_path}?{urlencode(query_params)}"
 
             log.debug(f"{method} {full_url}")
             response = requests.request(
@@ -262,7 +277,8 @@ class VastProxy:
 
     async def handle_request(self, request: web.Request) -> web.Response:
         """Forward incoming requests to Vast.ai"""
-        path = request.path
+        # Include query string in path
+        path = request.path_qs  # This includes query parameters
         method = request.method
 
         log.info(f"{method} {path}")

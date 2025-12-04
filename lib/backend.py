@@ -108,14 +108,14 @@ class Backend:
         timeout = ClientTimeout(total=None)
         return ClientSession(self.backend_url, timeout=timeout, connector=connector)
 
-    def create_handler(self, path: str = None):
+    def create_handler(self, path: Optional[str] = None):
         """
         Create a generic request handler that forwards any request to the backend.
 
         If path is provided, it will be used as the target endpoint.
         Otherwise, the path from auth_data.endpoint will be used.
         """
-        async def handler_fn(request: web.Request) -> web.Response:
+        async def handler_fn(request: web.Request) -> web.StreamResponse:
             return await self.__handle_request(request, path)
 
         return handler_fn
@@ -211,7 +211,7 @@ class Backend:
         payload: dict,
         request_metrics: RequestMetrics,
         target_path: Optional[str] = None,
-    ) -> web.Response:
+    ) -> web.StreamResponse:
         """Forward request to backend and return response"""
         try:
             # Determine endpoint to use
@@ -243,12 +243,17 @@ class Backend:
         self,
         request: web.Request,
         target_path: Optional[str] = None,
-    ) -> web.Response:
+    ) -> web.StreamResponse:
         """Forward requests to the model endpoint as-is"""
         # Parse and validate request
         auth_data, payload, error_response = await self.__parse_and_validate_request(request)
         if error_response:
             return error_response
+
+        # At this point, auth_data and payload must be non-None (or we would have returned error)
+        # Note: payload can be an empty dict {} for GET/DELETE/HEAD requests with no query params
+        assert auth_data is not None, "auth_data should not be None after error check"
+        assert payload is not None, "payload should not be None after error check"
 
         # Create request metrics
         workload = float(auth_data.cost)
@@ -326,14 +331,9 @@ class Backend:
         In local dev mode (unsecured=true):
             Supports passthrough - if no "auth_data" field, treats entire request as payload
         """
-        errors = {}
-        auth_data = None
-        payload = None
-
         # Passthrough mode: if unsecured and no auth_data, treat entire request as payload
         if self.unsecured and "auth_data" not in data:
             log.debug("Passthrough mode: treating entire request as payload")
-            payload = data
             # Create minimal auth_data for metrics tracking
             auth_data = AuthData(
                 cost="1.0",  # Default workload
@@ -343,12 +343,16 @@ class Backend:
                 signature="",
                 url=""
             )
-            return (auth_data, payload)
+            return (auth_data, data)
 
         # Standard mode: require both auth_data and payload
+        errors = {}
+        parsed_auth_data: Optional[AuthData] = None
+        parsed_payload: Optional[dict] = None
+
         try:
             if "auth_data" in data:
-                auth_data = AuthData.from_json_msg(data["auth_data"])
+                parsed_auth_data = AuthData.from_json_msg(data["auth_data"])
             else:
                 errors["auth_data"] = "field missing"
         except JsonDataException as e:
@@ -356,7 +360,7 @@ class Backend:
 
         try:
             if "payload" in data:
-                payload = data["payload"]
+                parsed_payload = data["payload"]
             else:
                 errors["payload"] = "field missing"
         except Exception as e:
@@ -365,7 +369,11 @@ class Backend:
         if errors:
             raise JsonDataException(errors)
 
-        return (auth_data, payload)
+        # At this point, both must be non-None (or we would have raised)
+        assert parsed_auth_data is not None, "auth_data should not be None after validation"
+        assert parsed_payload is not None, "payload should not be None after validation"
+
+        return (parsed_auth_data, parsed_payload)
 
     async def __call_api(
         self, endpoint: str, method: str, payload: dict
@@ -389,7 +397,7 @@ class Backend:
 
     async def __pass_through_response(
         self, client_request: web.Request, model_response: ClientResponse
-    ) -> web.Response:
+    ) -> web.StreamResponse:
         """Pass through the model response to client without transformation"""
 
         if model_response.status != 200:
@@ -595,6 +603,9 @@ class Backend:
             with open(BENCHMARK_INDICATOR_FILE, "w") as f:
                 f.write(str(max_throughput))
 
+        # Ensure max_throughput is set (should never be None at this point)
+        assert max_throughput is not None, "max_throughput should not be None after benchmark"
+
         # Mark as loaded and enable periodic healthchecks
         self.metrics._model_loaded(max_throughput=max_throughput)
         self.__start_healthcheck = True
@@ -602,8 +613,12 @@ class Backend:
 
     def __verify_signature(self, message: str, signature: str) -> bool:
         """Verify PKCS#1 signature"""
+        if self.pubkey is None:
+            log.debug("Signature verification skipped: no public key available")
+            return False
+
         try:
-            key = RSA.import_key(self.pubkey)
+            key = self.pubkey
             h = SHA256.new(message.encode())
             pkcs1_15.new(key).verify(h, base64.b64decode(signature))
             return True
