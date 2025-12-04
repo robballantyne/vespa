@@ -65,6 +65,13 @@ vespa/
 | `VESPA_UNSECURED` | `false` | Skip signature verification (dev only) |
 | `VESPA_USE_SSL` | `false`/`true` | SSL (false direct, true via start_server.sh) |
 
+### Client Options
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_TIMEOUT` | None | Request timeout in seconds (no limit by default) |
+| `VESPA_MAX_CONNECTIONS` | `100` | Max total HTTP connections |
+| `VESPA_MAX_CONNECTIONS_PER_HOST` | `20` | Max connections per host |
+
 ### Set by Vast.ai
 `MASTER_TOKEN`, `REPORT_ADDR`, `CONTAINER_ID`, `PUBLIC_IPADDR`, `VAST_TCP_PORT_*`
 
@@ -115,6 +122,7 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
 
 ## Local Development
 
+### Server (Vespa proxy)
 ```bash
 export VESPA_BACKEND_URL="http://localhost:8000"
 export VESPA_BENCHMARK="benchmarks.openai:benchmark"
@@ -127,3 +135,33 @@ curl -X POST http://localhost:3000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "my-model", "prompt": "Hello", "max_tokens": 100}'
 ```
+
+### Client Setup
+
+The client requires the Vast.ai root certificate for SSL connections:
+
+```bash
+# Download and install Vast.ai certificate
+curl -o /tmp/jvastai_root.cer https://console.vast.ai/static/jvastai_root.cer
+cat /tmp/jvastai_root.cer >> $(python -c "import certifi; print(certifi.where())")
+```
+
+Run the client:
+```bash
+# Interactive mode (easiest)
+python client.py
+
+# With endpoint API key
+python client.py --endpoint my-endpoint --api-key ENDPOINT_KEY
+
+# With account API key (auto-fetches endpoint key)
+python client.py --endpoint my-endpoint --account-key ACCOUNT_KEY
+
+# With custom settings
+python client.py --endpoint my-endpoint --timeout 600 --max-connections 200
+```
+
+Client features:
+- `/health` endpoint for load balancer health checks
+- Automatic retry on transient failures (5xx, network errors)
+- Configurable connection pooling and timeouts

@@ -75,6 +75,9 @@ class VastClient:
         host: str = "127.0.0.1",
         autoscaler_url: str = "https://run.vast.ai",
         instance: str = "prod",
+        timeout: Optional[int] = None,
+        max_connections: int = 100,
+        max_connections_per_host: int = 20,
     ):
         """
         Initialize Vast.ai client proxy.
@@ -86,6 +89,9 @@ class VastClient:
             host: Local proxy host (default: 127.0.0.1)
             autoscaler_url: Autoscaler URL (default: https://run.vast.ai)
             instance: Instance name (prod, alpha, candidate)
+            timeout: Request timeout in seconds (default: None, no limit)
+            max_connections: Max total connections (default: 100)
+            max_connections_per_host: Max connections per host (default: 20)
         """
         self.endpoint_name = endpoint_name
         self.api_key = api_key
@@ -93,6 +99,9 @@ class VastClient:
         self.host = host
         self.autoscaler_url = autoscaler_url.rstrip("/")
         self.instance = instance
+        self.timeout = timeout
+        self.max_connections = max_connections
+        self.max_connections_per_host = max_connections_per_host
 
         # HTTP client for routing calls
         self._session: Optional[ClientSession] = None
@@ -112,24 +121,25 @@ class VastClient:
     async def _ensure_session(self):
         """Ensure HTTP session is created."""
         if self._session is None:
-            timeout = ClientTimeout(total=300)  # 5 min for long inference
+            timeout = ClientTimeout(total=self.timeout) if self.timeout else ClientTimeout()
 
             # Create SSL context that uses certifi's certificate bundle
             ssl_context = ssl.create_default_context(cafile=certifi.where())
 
             connector = TCPConnector(
-                limit=100,
-                limit_per_host=20,
+                limit=self.max_connections,
+                limit_per_host=self.max_connections_per_host,
                 ssl=ssl_context
             )
             self._session = ClientSession(timeout=timeout, connector=connector)
 
-    async def route(self, workload: float = 1.0) -> Optional[Dict[str, Any]]:
+    async def route(self, workload: float = 1.0, max_retries: int = 2) -> Optional[Dict[str, Any]]:
         """
         Call /route/ to get worker assignment.
 
         Args:
             workload: Estimated workload units (default: 1.0)
+            max_retries: Max retries for transient failures (default: 2)
 
         Returns:
             Dict with worker URL, signature, and routing info
@@ -137,48 +147,70 @@ class VastClient:
         await self._ensure_session()
         assert self._session is not None, "Session should be initialized"
 
-        try:
-            async with self._session.post(
-                f"{self.autoscaler_url}/route/",
-                json={
-                    "endpoint": self.endpoint_name,
-                    "cost": workload,
-                },
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                timeout=ClientTimeout(total=10),
-            ) as response:
-                # Read response body first
-                text = await response.text()
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                async with self._session.post(
+                    f"{self.autoscaler_url}/route/",
+                    json={
+                        "endpoint": self.endpoint_name,
+                        "cost": workload,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    timeout=ClientTimeout(total=10),
+                ) as response:
+                    # Read response body first
+                    text = await response.text()
 
-                if response.status != 200:
-                    log.error(f"Route failed: {response.status} - {text}")
-                    if response.status == 401:
-                        log.error("")
-                        log.error("HINT: 401 Unauthorized usually means:")
-                        log.error("  - You're using the wrong API key type")
-                        log.error("  - Endpoint API key is required, not account API key")
-                        log.error("  - Use --account-key to auto-fetch the correct key")
-                        log.error("")
-                    return None
+                    # Don't retry client errors (4xx) - these are intentional signals
+                    if 400 <= response.status < 500:
+                        log.error(f"Route failed: {response.status} - {text}")
+                        if response.status == 401:
+                            log.error("")
+                            log.error("HINT: 401 Unauthorized usually means:")
+                            log.error("  - You're using the wrong API key type")
+                            log.error("  - Endpoint API key is required, not account API key")
+                            log.error("  - Use --account-key to auto-fetch the correct key")
+                            log.error("")
+                        return None
 
-                # Try to parse as JSON (be lenient with Content-Type)
-                try:
-                    data = json.loads(text)
-                    log.debug(f"Got worker assignment: {data.get('url', 'unknown')}")
-                    log.debug(f"Routing response: {data}")
-                    return data
-                except json.JSONDecodeError as e:
-                    # Only log Content-Type if JSON parsing fails
-                    content_type = response.content_type or ""
-                    log.error(f"Failed to decode JSON response (Content-Type: {content_type}): {e}")
-                    log.error(f"Response body: {text[:500]}")
-                    return None
+                    # Retry on server errors (5xx)
+                    if response.status >= 500:
+                        last_error = f"Server error: {response.status} - {text}"
+                        if attempt < max_retries:
+                            wait_time = 0.5 * (attempt + 1)
+                            log.warning(f"Route returned {response.status}, retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        log.error(f"Route failed after {max_retries + 1} attempts: {last_error}")
+                        return None
 
-        except Exception as e:
-            log.error(f"Route error: {e}", exc_info=True)
-            return None
+                    # Try to parse as JSON (be lenient with Content-Type)
+                    try:
+                        data = json.loads(text)
+                        log.debug(f"Got worker assignment: {data.get('url', 'unknown')}")
+                        log.debug(f"Routing response: {data}")
+                        return data
+                    except json.JSONDecodeError as e:
+                        # Only log Content-Type if JSON parsing fails
+                        content_type = response.content_type or ""
+                        log.error(f"Failed to decode JSON response (Content-Type: {content_type}): {e}")
+                        log.error(f"Response body: {text[:500]}")
+                        return None
+
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    wait_time = 0.5 * (attempt + 1)
+                    log.warning(f"Route error: {e}, retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                log.error(f"Route failed after {max_retries + 1} attempts: {e}", exc_info=True)
+                return None
+
+        return None
 
     async def _handle_request(self, request: web.Request) -> web.StreamResponse:
         """Forward incoming requests to Vast.ai workers with streaming support."""
@@ -378,10 +410,18 @@ class VastClient:
                 headers=response_headers,
             )
 
+    async def _handle_health(self, request: web.Request) -> web.Response:
+        """Health check endpoint for load balancers and monitoring."""
+        return web.json_response({
+            "status": "healthy",
+            "endpoint": self.endpoint_name,
+        })
+
     async def start(self):
         """Start the proxy server."""
         # Create app
         self._app = web.Application()
+        self._app.router.add_get("/health", self._handle_health)
         self._app.router.add_route("*", "/{path:.*}", self._handle_request)
 
         # Setup runner
@@ -612,6 +652,24 @@ Examples:
         help="Vast.ai instance (default: prod)"
     )
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=int(os.environ["VESPA_TIMEOUT"]) if os.environ.get("VESPA_TIMEOUT") else None,
+        help="Request timeout in seconds (default: no limit, or VESPA_TIMEOUT env var)"
+    )
+    parser.add_argument(
+        "--max-connections",
+        type=int,
+        default=int(os.environ.get("VESPA_MAX_CONNECTIONS", 100)),
+        help="Max total connections (default: 100, or VESPA_MAX_CONNECTIONS env var)"
+    )
+    parser.add_argument(
+        "--max-connections-per-host",
+        type=int,
+        default=int(os.environ.get("VESPA_MAX_CONNECTIONS_PER_HOST", 20)),
+        help="Max connections per host (default: 20, or VESPA_MAX_CONNECTIONS_PER_HOST env var)"
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging"
@@ -692,6 +750,9 @@ Examples:
         port=args.port,
         host=args.host,
         autoscaler_url=args.autoscaler_url,
+        timeout=args.timeout,
+        max_connections=args.max_connections,
+        max_connections_per_host=args.max_connections_per_host,
     )
 
     asyncio.run(client.run_forever())
