@@ -284,9 +284,7 @@ class Metrics:
 
     async def _send_metrics_and_reset(self):
         """Send metrics to autoscaler and reset counters"""
-        loadtime_snapshot = self.system_metrics.model_loading_time
-
-        ###########
+        loadtime_snapshot = self.system_metrics.model_loading_time or 0.0
 
         self.system_metrics.update_disk_usage()
 
