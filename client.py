@@ -169,23 +169,53 @@ class VastClient:
             "url": worker_url,
         }
 
-        # Wrap payload
-        payload = {
-            "auth_data": auth_data,
-            "payload": json or {},
-        }
+        # Handle GET/DELETE/HEAD differently (no body, use query params)
+        if method in ["GET", "DELETE", "HEAD"]:
+            # Encode auth_data as query parameters (prefixed with serverless_ to avoid conflicts)
+            from urllib.parse import urlencode
 
-        # Forward to worker
-        log.debug(f"{method} {worker_url}{path}")
-        response = requests.request(
-            method,
-            worker_url,
-            json=payload if json else None,
-            data=data,
-            headers=headers,
-            timeout=300,  # Long timeout for model inference
-            stream=stream,
-        )
+            query_params = {
+                "serverless_cost": auth_data["cost"],
+                "serverless_endpoint": auth_data["endpoint"],
+                "serverless_reqnum": str(auth_data["reqnum"]),
+                "serverless_request_idx": str(auth_data["request_idx"]),
+                "serverless_signature": auth_data["signature"],
+                "serverless_url": auth_data["url"],
+            }
+
+            # Add payload fields as additional query params (unprefixed - these go to backend)
+            if json:
+                query_params.update(json)
+
+            # Build full URL with query params
+            full_url = f"{worker_url}{path}?{urlencode(query_params)}"
+
+            log.debug(f"{method} {full_url}")
+            response = requests.request(
+                method,
+                full_url,
+                headers=headers,
+                timeout=300,
+                stream=stream,
+            )
+        else:
+            # POST/PUT/PATCH: use JSON body
+            payload = {
+                "auth_data": auth_data,
+                "payload": json or {},
+            }
+
+            full_url = f"{worker_url}{path}"
+            log.debug(f"{method} {full_url}")
+            response = requests.request(
+                method,
+                full_url,
+                json=payload if json else None,
+                data=data,
+                headers=headers,
+                timeout=300,  # Long timeout for model inference
+                stream=stream,
+            )
 
         return response
 

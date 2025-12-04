@@ -120,6 +120,70 @@ class Backend:
     ) -> Tuple[Optional[AuthData], Optional[dict], Optional[web.Response]]:
         """Parse and validate incoming request. Returns (auth_data, payload, error_response)"""
         try:
+            # GET/DELETE/HEAD requests don't have bodies - use query params for auth_data
+            if request.method in ["GET", "DELETE", "HEAD"]:
+                # Try to parse auth_data from query parameters (prefixed with serverless_)
+                query_params = dict(request.query)
+
+                # Check if auth_data fields are present in query params (with serverless_ prefix)
+                auth_param_keys = [
+                    "serverless_cost", "serverless_endpoint", "serverless_reqnum",
+                    "serverless_request_idx", "serverless_signature", "serverless_url"
+                ]
+                has_auth_params = any(key in query_params for key in auth_param_keys)
+
+                if has_auth_params:
+                    # Parse auth_data from query parameters
+                    try:
+                        auth_data = AuthData(
+                            cost=query_params.get("serverless_cost", "1.0"),
+                            endpoint=query_params.get("serverless_endpoint", request.path),
+                            reqnum=int(query_params.get("serverless_reqnum", 0)),
+                            request_idx=int(query_params.get("serverless_request_idx", 0)),
+                            signature=query_params.get("serverless_signature", ""),
+                            url=query_params.get("serverless_url", "")
+                        )
+
+                        # Validate signature if not unsecured
+                        if not self.unsecured and not self.__check_signature(auth_data):
+                            return None, None, web.json_response(
+                                dict(error="invalid signature"),
+                                status=401
+                            )
+
+                        # Remaining query params (excluding serverless_ prefixed fields) become payload
+                        payload = {
+                            k: v for k, v in query_params.items()
+                            if k not in auth_param_keys
+                        }
+
+                        return auth_data, payload, None
+                    except (ValueError, TypeError) as e:
+                        return None, None, web.json_response(
+                            dict(error=f"Invalid auth_data in query params: {str(e)}"),
+                            status=400
+                        )
+
+                # No auth_data in query params
+                if self.unsecured:
+                    # In unsecured mode, create minimal auth_data
+                    auth_data = AuthData(
+                        cost="1.0",
+                        endpoint=request.path,
+                        reqnum=0,
+                        request_idx=0,
+                        signature="",
+                        url=""
+                    )
+                    # All query params become payload
+                    return auth_data, query_params, None
+                else:
+                    return None, None, web.json_response(
+                        dict(error=f"{request.method} requests require auth_data in query params (serverless_cost, serverless_endpoint, serverless_reqnum, serverless_request_idx, serverless_signature, serverless_url)"),
+                        status=400
+                    )
+
+            # POST/PUT/PATCH requests should have JSON body
             data = await request.json()
             auth_data, payload = self.__parse_request(data, request.path)
             return auth_data, payload, None

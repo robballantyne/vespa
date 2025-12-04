@@ -169,7 +169,7 @@ gather(
 - `VESPA_MAX_WAIT_TIME`: Max queue wait time in seconds (default: `10.0`)
 - `VESPA_READY_TIMEOUT`: Seconds to wait for backend ready (default: `1200`)
 - `VESPA_UNSECURED`: Disable signature verification (default: `false`, **local dev only**)
-- `VESPA_USE_SSL`: Enable SSL/TLS (default: `false`)
+- `VESPA_USE_SSL`: Enable SSL/TLS (default: `false` when running `server.py` directly, `true` when using `start_server.sh` on Vast.ai)
 - `VESPA_LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL (default: `INFO`)
 
 ### Advanced Tunables
@@ -271,7 +271,12 @@ def __check_signature(self, auth_data: AuthData) -> bool:
 
 **Why**: Prevent unauthorized requests to workers. Autoscaler signs all requests.
 
-**Important**: Signature is over `{cost, endpoint, reqnum, request_idx, url}` sorted JSON.
+**Important**:
+- Signature is over `{cost, endpoint, reqnum, request_idx, url}` sorted JSON
+- For POST/PUT/PATCH: auth_data + payload in JSON body
+- For GET/DELETE/HEAD: auth_data in query parameters with `serverless_` prefix (no body allowed by HTTP spec)
+  - `serverless_cost`, `serverless_endpoint`, `serverless_reqnum`, `serverless_request_idx`, `serverless_signature`, `serverless_url`
+  - Unprefixed query params are passed through to backend as payload
 
 ### 5. Benchmark Functions
 
@@ -414,7 +419,24 @@ connector = TCPConnector(
 export VESPA_BACKEND_URL="http://localhost:8000"
 export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 export VESPA_UNSECURED="true"  # Skip signature verification
+export VESPA_USE_SSL="false"   # Disable SSL for local testing (optional, false is default)
 python server.py
+```
+
+**Note:** If using `start_server.sh` instead of running `server.py` directly, SSL defaults to `true`. Either set `VESPA_USE_SSL=false` or use HTTPS in your requests.
+
+### Testing on Remote/Vast.ai Instance
+
+When SSH'd into a Vast.ai worker where `start_server.sh` is running:
+
+```bash
+# Option 1: Use HTTPS (SSL is enabled by default in start_server.sh)
+curl -k https://localhost:3000/v1/models
+
+# Option 2: Disable SSL and restart
+export VESPA_USE_SSL=false
+# Restart the server, then use HTTP
+curl http://localhost:3000/v1/models
 ```
 
 ### Test Request (Passthrough Mode - RECOMMENDED)
@@ -422,8 +444,27 @@ python server.py
 When `VESPA_UNSECURED=true`, you can send requests directly without wrapping in auth_data:
 
 ```bash
-# Simple passthrough - just like calling your backend directly
+# If VESPA_USE_SSL=false (or running server.py directly):
+
+# GET request (no body needed)
+curl http://localhost:3000/v1/models
+
+# POST request with JSON body
 curl -X POST http://localhost:3000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "prompt": "Hello",
+    "max_tokens": 100
+  }'
+
+# If VESPA_USE_SSL=true (default when using start_server.sh):
+
+# GET request with HTTPS
+curl -k https://localhost:3000/v1/models
+
+# POST request with HTTPS
+curl -k -X POST https://localhost:3000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "my-model",
@@ -432,11 +473,28 @@ curl -X POST http://localhost:3000/v1/completions \
   }'
 ```
 
-Vespa automatically creates minimal auth_data for metrics tracking.
+Vespa automatically creates minimal auth_data for metrics tracking. GET/DELETE/HEAD requests don't require a body. The `-k` flag skips certificate verification for self-signed certs.
+
+### GET Requests in Production Mode
+
+For GET/DELETE/HEAD requests (which can't have JSON bodies), auth_data is passed via query parameters with `serverless_` prefix to avoid conflicts with backend parameters:
+
+```bash
+# Production GET request with auth_data in query params (serverless_ prefixed)
+curl "https://worker-url:3000/v1/models?serverless_cost=1.0&serverless_endpoint=/v1/models&serverless_reqnum=1&serverless_request_idx=1&serverless_signature=BASE64_SIG&serverless_url=https://worker-url:3000"
+
+# Can include backend query params too (unprefixed, passed through to backend)
+curl "https://worker-url:3000/v1/models?serverless_cost=1.0&serverless_endpoint=/v1/models&serverless_reqnum=1&serverless_request_idx=1&serverless_signature=SIG&serverless_url=URL&limit=10&offset=0"
+
+# In unsecured mode, query params (without serverless_ prefix) become payload for filtering/pagination
+curl "http://localhost:3000/v1/models?limit=10&offset=0"
+```
+
+**Note:** The `serverless_` prefix ensures the serverless architecture's auth parameters don't conflict with your backend's query parameters.
 
 ### Test Request (Production Format)
 
-You can also test with the full production format:
+You can also test POST requests with the full production format:
 
 ```bash
 curl -X POST http://localhost:3000/v1/completions \
@@ -490,6 +548,58 @@ vespa/
 ```
 
 ## Recent Changes Log
+
+### 2025-12-04: Implemented Query Parameter Auth for GET Requests (with serverless_ prefix)
+- **New feature**: GET/DELETE/HEAD requests now support auth_data via query parameters with `serverless_` prefix
+  - `lib/backend.py:118-192`: Complete rewrite of request parsing for bodiless HTTP methods
+  - Parses auth_data from query params: `?serverless_cost=1.0&serverless_endpoint=/path&serverless_reqnum=1&serverless_request_idx=1&serverless_signature=xyz&serverless_url=http://...`
+  - **Namespace protection**: `serverless_` prefix prevents conflicts with backend API query parameters
+  - Validates signature for authenticated GET requests
+  - Remaining query params (non-serverless_ fields) become payload for backend filtering/pagination
+  - Falls back to minimal auth_data in unsecured mode if no auth params present
+- **Updated client.py**: Added support for encoding auth_data as query params for GET/DELETE/HEAD requests
+  - `client.py:172-220`: Split request handling into two branches based on HTTP method
+  - GET/DELETE/HEAD: Encodes auth_data with `serverless_` prefix + payload unprefixed as query parameters
+  - POST/PUT/PATCH: Wraps auth_data + payload in JSON body (existing behavior)
+  - **Fixed bug**: Path wasn't being appended to worker_url (requests were going to wrong URL)
+- **Solves production limitation**: Previously, GET requests were impossible in production mode since auth_data required JSON body
+
+**Rationale**: In production mode with signature verification, all requests need auth_data. But GET/DELETE/HEAD requests can't have request bodies by HTTP spec. This created a fundamental limitation where these methods were unusable in production. Query parameter auth with `serverless_` prefix solves this by encoding auth_data in the URL while avoiding conflicts with backend query parameters. The prefix reflects that this is part of the Vast.ai serverless architecture, not Vespa-specific.
+
+**Impact**: GET requests now work in both secured and unsecured modes. The autoscaler can route GET requests by including auth_data as query parameters. Backend APIs can use their own query parameters without conflicts.
+
+**Example usage:**
+```bash
+# Production mode with auth_data in query params (serverless_ prefixed)
+curl "https://worker:3000/v1/models?serverless_cost=1.0&serverless_endpoint=/v1/models&serverless_reqnum=1&serverless_request_idx=1&serverless_signature=SIG&serverless_url=URL"
+
+# With backend query params (unprefixed, passed through)
+curl "https://worker:3000/v1/models?serverless_cost=1.0&serverless_endpoint=/v1/models&serverless_reqnum=1&serverless_request_idx=1&serverless_signature=SIG&serverless_url=URL&limit=10&offset=0"
+
+# Unsecured mode with query params as payload
+curl "http://localhost:3000/v1/models?limit=10&offset=0"
+```
+
+### 2025-12-04: Fixed Documentation for VESPA_USE_SSL Default
+- **Documentation fix**: Clarified that `VESPA_USE_SSL` has different defaults depending on how server is started
+  - When running `python server.py` directly: defaults to `false` (`lib/server.py:18`)
+  - When using `start_server.sh` (Vast.ai production): defaults to `true` (`start_server.sh:13`)
+- **Updated documentation**: README.md and CLAUDE.md now correctly document both defaults
+- **Impact**: Users on Vast.ai must use HTTPS (with `-k` flag for self-signed certs) or explicitly set `VESPA_USE_SSL=false`
+
+**Rationale**: The code had two different default values depending on the entry point. `start_server.sh` sets SSL to true for production security, but the documentation only mentioned the direct server.py default of false. This caused confusion when "Empty reply from server" errors occurred due to HTTP/HTTPS protocol mismatch.
+
+### 2025-12-04: Fixed GET Request Handling in Unsecured Mode
+- **Fixed critical bug**: GET/DELETE/HEAD requests now work correctly in passthrough mode
+  - `lib/backend.py:118-149`: Added special handling for requests without bodies
+  - Previously tried to parse JSON body for all requests, causing 500 errors on GET requests
+  - Now creates minimal auth_data with empty payload for bodiless requests in unsecured mode
+  - Non-unsecured mode returns 400 error with helpful message
+- **Error message**: Added clear error when GET requests attempted without VESPA_UNSECURED=true
+
+**Rationale**: GET, DELETE, and HEAD requests don't have request bodies by HTTP spec, but the code was calling `await request.json()` for all requests. This caused uncaught exceptions when handling GET requests like `/v1/models`.
+
+**Impact**: GET requests now work correctly in unsecured/passthrough mode. This is essential for model listing and health check endpoints.
 
 ### 2025-12-04: Fixed Benchmark Session Usage and Enhanced Error Handling
 - **Fixed critical bug**: All benchmarks now use relative paths instead of absolute URLs

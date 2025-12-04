@@ -407,11 +407,16 @@ python client.py --endpoint my-endpoint --account-key YOUR_KEY
 # Start proxy
 python client.py
 
-# In another terminal
+# In another terminal - Test GET request
+curl http://localhost:8010/v1/models
+
+# Test POST request
 curl http://localhost:8010/v1/completions \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Hello", "max_tokens": 50}'
 ```
+
+**Note:** The client automatically handles GET/DELETE/HEAD requests by encoding auth_data as query parameters (required for production signature verification).
 
 ### Production Setup
 

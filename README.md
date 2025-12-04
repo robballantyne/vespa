@@ -63,7 +63,7 @@ curl -X POST http://localhost:3000/v1/completions \
 | `VESPA_MAX_WAIT_TIME` | `10.0` | Max queue wait time (seconds) before rejecting (HTTP 429) |
 | `VESPA_READY_TIMEOUT` | `1200` | Max seconds to wait for backend ready (20 minutes) |
 | `VESPA_UNSECURED` | `false` | Disable signature verification (**local dev only**) |
-| `VESPA_USE_SSL` | `false` | Enable SSL/TLS |
+| `VESPA_USE_SSL` | `false` (direct) / `true` (Vast.ai) | Enable SSL/TLS. Default is `false` when running `server.py` directly, `true` when using `start_server.sh` |
 | `VESPA_LOG_LEVEL` | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL |
 
 ### Advanced Tunables
