@@ -15,6 +15,7 @@ import time
 import random
 import logging
 import asyncio
+import traceback
 from aiohttp import ClientSession
 
 try:
@@ -105,7 +106,8 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
     except Exception as e:
         log.error(
             f"Warmup failed with exception: {type(e).__name__}: {str(e)}\n"
-            f"Exception details: {repr(e)}"
+            f"Exception details: {repr(e)}\n"
+            f"Traceback:\n{traceback.format_exc()}"
         )
         return 1.0
 
