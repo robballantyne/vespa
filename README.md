@@ -61,7 +61,8 @@ curl -X POST http://localhost:3000/v1/completions \
 | `VESPA_HEALTHCHECK_ENDPOINT` | None | Health check path (e.g., `/health`)<br/>Falls back to `/health` if not set |
 | `VESPA_ALLOW_PARALLEL` | `true` | Allow concurrent request processing |
 | `VESPA_MAX_WAIT_TIME` | `10.0` | Max queue wait time (seconds) before rejecting (HTTP 429) |
-| `VESPA_READY_TIMEOUT` | `1200` | Max seconds to wait for backend ready (20 minutes) |
+| `VESPA_READY_TIMEOUT_INITIAL` | `1200` | Max seconds to wait for backend ready on initial startup when models need downloading (20 minutes) |
+| `VESPA_READY_TIMEOUT_RESUME` | `300` | Max seconds to wait for backend ready when resuming from stopped state with models on disk (5 minutes) |
 | `VESPA_UNSECURED` | `false` | Disable signature verification (**local dev only**) |
 | `VESPA_USE_SSL` | `false` (direct) / `true` (Vast.ai) | Enable SSL/TLS. Default is `false` when running `server.py` directly, `true` when using `start_server.sh` |
 | `VESPA_LOG_LEVEL` | `INFO` | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL |
@@ -80,8 +81,9 @@ curl -X POST http://localhost:3000/v1/completions \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VESPA_HEALTHCHECK_RETRY_INTERVAL` | `5` | Seconds between healthcheck retries during startup |
-| `VESPA_HEALTHCHECK_POLL_INTERVAL` | `10` | Seconds between periodic healthchecks |
+| `VESPA_HEALTHCHECK_POLL_INTERVAL` | `10` | Seconds between periodic healthchecks after startup |
 | `VESPA_HEALTHCHECK_TIMEOUT` | `10` | Timeout (seconds) for healthcheck requests |
+| `VESPA_HEALTHCHECK_CONSECUTIVE_FAILURES` | `3` | Number of consecutive failures before marking backend as errored |
 
 **Metrics & Reporting:**
 | Variable | Default | Description |
@@ -362,7 +364,7 @@ asyncio.run(test())
 **Error:** `Backend failed to become ready after N seconds`
 
 **Solutions:**
-1. Increase `VESPA_READY_TIMEOUT` for slow-loading models
+1. Increase `VESPA_READY_TIMEOUT_INITIAL` for slow-loading models on initial startup, or `VESPA_READY_TIMEOUT_RESUME` for slow loading on resume
 2. Verify `VESPA_HEALTHCHECK_ENDPOINT` returns HTTP 200 when ready
 3. Check backend logs for errors
 

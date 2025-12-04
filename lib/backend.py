@@ -33,6 +33,7 @@ MAX_PUBKEY_FETCH_ATTEMPTS = int(os.environ.get("VESPA_PUBKEY_MAX_RETRIES", "3"))
 HEALTHCHECK_RETRY_INTERVAL = int(os.environ.get("VESPA_HEALTHCHECK_RETRY_INTERVAL", "5"))
 HEALTHCHECK_POLL_INTERVAL = int(os.environ.get("VESPA_HEALTHCHECK_POLL_INTERVAL", "10"))
 HEALTHCHECK_TIMEOUT = int(os.environ.get("VESPA_HEALTHCHECK_TIMEOUT", "10"))
+HEALTHCHECK_CONSECUTIVE_FAILURES = int(os.environ.get("VESPA_HEALTHCHECK_CONSECUTIVE_FAILURES", "3"))
 PUBKEY_FETCH_TIMEOUT = int(os.environ.get("VESPA_PUBKEY_TIMEOUT", "10"))
 METRICS_RETRY_DELAY = int(os.environ.get("VESPA_METRICS_RETRY_DELAY", "2"))
 CONNECTION_LIMIT = int(os.environ.get("VESPA_CONNECTION_LIMIT", "100"))
@@ -65,8 +66,11 @@ class Backend:
     max_wait_time: float = dataclasses.field(
         default_factory=lambda: float(os.environ.get("VESPA_MAX_WAIT_TIME", "10.0"))
     )
-    ready_timeout: int = dataclasses.field(
-        default_factory=lambda: int(os.environ.get("VESPA_READY_TIMEOUT", "1200"))
+    ready_timeout_initial: int = dataclasses.field(
+        default_factory=lambda: int(os.environ.get("VESPA_READY_TIMEOUT_INITIAL", "1200"))
+    )
+    ready_timeout_resume: int = dataclasses.field(
+        default_factory=lambda: int(os.environ.get("VESPA_READY_TIMEOUT_RESUME", "300"))
     )
     reqnum = -1
     version = VERSION
@@ -88,6 +92,7 @@ class Backend:
         self._total_pubkey_fetch_errors = 0
         self._pubkey = self._fetch_pubkey()
         self.__start_healthcheck: bool = False
+        self.__consecutive_healthcheck_failures: int = 0
 
     @property
     def pubkey(self) -> Optional[RSA.RsaKey]:
@@ -439,21 +444,30 @@ class Backend:
         timeout = ClientTimeout(total=HEALTHCHECK_TIMEOUT)
         return ClientSession(timeout=timeout, connector=connector)
 
-    async def __wait_for_backend_ready(self) -> None:
-        """Poll healthcheck endpoint until backend is ready or timeout"""
+    async def __wait_for_backend_ready(self, is_resume: bool = False) -> None:
+        """Poll healthcheck endpoint until backend is ready or timeout
+
+        Args:
+            is_resume: If True, use shorter resume timeout (models already on disk).
+                      If False, use longer initial timeout (models need to download).
+        """
         # Use configured endpoint or default to /health
         endpoint = self.healthcheck_endpoint if self.healthcheck_endpoint else "/health"
         url = f"{self.backend_url}{endpoint}"
 
-        log.info(f"Waiting for backend to be ready at {url} (timeout: {self.ready_timeout}s)")
+        # Choose timeout based on whether this is initial boot or resume
+        timeout = self.ready_timeout_resume if is_resume else self.ready_timeout_initial
+        timeout_type = "resume" if is_resume else "initial"
+
+        log.info(f"Waiting for backend to be ready at {url} ({timeout_type} timeout: {timeout}s)")
 
         start_time = time.time()
 
         while True:
             elapsed = time.time() - start_time
 
-            if elapsed >= self.ready_timeout:
-                error_msg = f"Backend failed to become ready after {self.ready_timeout} seconds"
+            if elapsed >= timeout:
+                error_msg = f"Backend failed to become ready after {timeout} seconds ({timeout_type} timeout)"
                 log.error(error_msg)
                 self.backend_errored(error_msg)
                 raise RuntimeError(error_msg)
@@ -471,7 +485,7 @@ class Backend:
             await sleep(HEALTHCHECK_RETRY_INTERVAL)
 
     async def __healthcheck(self):
-        """Periodic healthcheck of the backend"""
+        """Periodic healthcheck of the backend with consecutive failure tracking"""
         if self.healthcheck_endpoint is None:
             log.debug("No healthcheck endpoint defined, skipping healthcheck")
             return
@@ -480,22 +494,44 @@ class Backend:
             await sleep(HEALTHCHECK_POLL_INTERVAL)
             if self.__start_healthcheck is False:
                 continue
+
+            healthcheck_failed = False
+            failure_reason = ""
+
             try:
                 log.debug(f"Performing healthcheck on {self.healthcheck_endpoint}")
                 url = f"{self.backend_url}{self.healthcheck_endpoint}"
                 async with self.healthcheck_session.get(url) as response:
                     if response.status == 200:
+                        # Success - reset failure counter
+                        if self.__consecutive_healthcheck_failures > 0:
+                            log.info(f"Healthcheck recovered after {self.__consecutive_healthcheck_failures} failures")
+                        self.__consecutive_healthcheck_failures = 0
                         log.debug("Healthcheck successful")
                     elif response.status == 503:
-                        log.debug(f"Healthcheck failed with status: {response.status}")
-                        self.backend_errored(
-                            f"Healthcheck failed with status: {response.status}"
-                        )
+                        healthcheck_failed = True
+                        failure_reason = f"Healthcheck returned 503 Service Unavailable"
                     else:
-                        log.debug(f"Healthcheck Endpoint not ready: {response.status}")
+                        healthcheck_failed = True
+                        failure_reason = f"Healthcheck returned status {response.status}"
             except Exception as e:
-                log.debug(f"Healthcheck failed with exception: {e}")
-                self.backend_errored(str(e))
+                healthcheck_failed = True
+                failure_reason = f"Healthcheck exception: {type(e).__name__}: {str(e)}"
+
+            # Handle failure
+            if healthcheck_failed:
+                self.__consecutive_healthcheck_failures += 1
+                log.warning(
+                    f"Healthcheck failed ({self.__consecutive_healthcheck_failures}/{HEALTHCHECK_CONSECUTIVE_FAILURES}): {failure_reason}"
+                )
+
+                # Only mark as errored after consecutive failures threshold
+                if self.__consecutive_healthcheck_failures >= HEALTHCHECK_CONSECUTIVE_FAILURES:
+                    error_msg = f"Backend failed {HEALTHCHECK_CONSECUTIVE_FAILURES} consecutive healthchecks: {failure_reason}"
+                    log.error(error_msg)
+                    self.backend_errored(error_msg)
+                    # Reset counter so we don't spam error messages
+                    self.__consecutive_healthcheck_failures = 0
 
     async def _start_tracking(self) -> None:
         """Run benchmark, then start background tasks for metrics and healthcheck"""
@@ -516,42 +552,53 @@ class Backend:
     async def __run_benchmark_on_startup(self) -> None:
         """Run benchmark on startup to determine max throughput"""
 
-        # Check if benchmark already completed
+        # Check if this is initial boot or resume (based on benchmark cache)
+        benchmark_cached = False
+        max_throughput = None
+
         try:
             with open(BENCHMARK_INDICATOR_FILE, "r") as f:
                 max_throughput = float(f.readline())
-                log.debug(f"Benchmark already completed: {max_throughput} workload/s")
-                self.metrics._model_loaded(max_throughput=max_throughput)
-                self.__start_healthcheck = True
-                return
+                benchmark_cached = True
+                log.info(f"Benchmark cache found - this is a resume from stopped state")
         except FileNotFoundError:
-            pass
+            log.info(f"No benchmark cache - this is initial startup")
 
-        # Wait for backend to be ready via healthcheck
-        await self.__wait_for_backend_ready()
+        # Always wait for backend to be ready, regardless of benchmark cache
+        # Use different timeout depending on whether this is initial boot or resume
+        # Initial: Models need to download (20 min default)
+        # Resume: Models already on disk (5 min default)
+        await self.__wait_for_backend_ready(is_resume=benchmark_cached)
 
-        if self.benchmark_func is None:
-            log.warning("No benchmark function provided, using default throughput of 1.0")
-            max_throughput = 1.0
+        # Use cached benchmark if available, otherwise run it
+        if benchmark_cached:
+            log.info(f"Using cached benchmark result: {max_throughput} workload/s")
         else:
-            try:
-                log.debug("Running benchmark...")
-                max_throughput = await self.benchmark_func(
-                    self.backend_url,
-                    self.session
-                )
-                log.debug(f"Benchmark completed: {max_throughput} workload/s")
-            except Exception as e:
-                log.error(f"Benchmark failed: {e}")
-                self.backend_errored(f"Benchmark failed: {e}")
+            # No cache, need to run benchmark
+            if self.benchmark_func is None:
+                log.warning("No benchmark function provided, using default throughput of 1.0")
                 max_throughput = 1.0
+            else:
+                try:
+                    log.debug("Running benchmark...")
+                    max_throughput = await self.benchmark_func(
+                        self.backend_url,
+                        self.session
+                    )
+                    log.debug(f"Benchmark completed: {max_throughput} workload/s")
+                except Exception as e:
+                    log.error(f"Benchmark failed: {e}")
+                    self.backend_errored(f"Benchmark failed: {e}")
+                    max_throughput = 1.0
 
-        # Save benchmark result
-        with open(BENCHMARK_INDICATOR_FILE, "w") as f:
-            f.write(str(max_throughput))
+            # Save benchmark result to cache
+            with open(BENCHMARK_INDICATOR_FILE, "w") as f:
+                f.write(str(max_throughput))
 
+        # Mark as loaded and enable periodic healthchecks
         self.metrics._model_loaded(max_throughput=max_throughput)
         self.__start_healthcheck = True
+        log.info(f"Worker ready (benchmark {'cached' if benchmark_cached else 'completed'}), starting periodic healthchecks")
 
     def __verify_signature(self, message: str, signature: str) -> bool:
         """Verify PKCS#1 signature"""

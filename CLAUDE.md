@@ -83,7 +83,8 @@ server.py                  # Entry point, loads config and benchmark
 - `healthcheck_endpoint`: Health check path (defaults to `/health`)
 - `allow_parallel_requests`: Enable concurrent request handling (default: true)
 - `max_wait_time`: Max queue time before rejecting (default: 10s)
-- `ready_timeout`: Max time to wait for backend ready (default: 1200s / 20 minutes)
+- `ready_timeout_initial`: Max time to wait for backend ready on initial startup when models need downloading (default: 1200s / 20 minutes)
+- `ready_timeout_resume`: Max time to wait for backend ready when resuming from stopped state with models on disk (default: 300s / 5 minutes)
 
 ### 2. Metrics (`lib/metrics.py`)
 
@@ -167,7 +168,8 @@ gather(
 - `VESPA_HEALTHCHECK_ENDPOINT`: Health check path (optional; falls back to `/health`)
 - `VESPA_ALLOW_PARALLEL`: Allow concurrent requests (default: `true`)
 - `VESPA_MAX_WAIT_TIME`: Max queue wait time in seconds (default: `10.0`)
-- `VESPA_READY_TIMEOUT`: Seconds to wait for backend ready (default: `1200`)
+- `VESPA_READY_TIMEOUT_INITIAL`: Seconds to wait for backend ready on initial startup when models need downloading (default: `1200` / 20 minutes)
+- `VESPA_READY_TIMEOUT_RESUME`: Seconds to wait for backend ready when resuming from stopped state with models on disk (default: `300` / 5 minutes)
 - `VESPA_UNSECURED`: Disable signature verification (default: `false`, **local dev only**)
 - `VESPA_USE_SSL`: Enable SSL/TLS (default: `false` when running `server.py` directly, `true` when using `start_server.sh` on Vast.ai)
 - `VESPA_LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR, CRITICAL (default: `INFO`)
@@ -182,8 +184,9 @@ gather(
 
 **Healthcheck:**
 - `VESPA_HEALTHCHECK_RETRY_INTERVAL`: Seconds between healthcheck retries during startup (default: `5`)
-- `VESPA_HEALTHCHECK_POLL_INTERVAL`: Seconds between periodic healthchecks (default: `10`)
+- `VESPA_HEALTHCHECK_POLL_INTERVAL`: Seconds between periodic healthchecks after startup (default: `10`)
 - `VESPA_HEALTHCHECK_TIMEOUT`: Timeout for healthcheck requests in seconds (default: `10`)
+- `VESPA_HEALTHCHECK_CONSECUTIVE_FAILURES`: Number of consecutive failures before marking backend as errored (default: `3`)
 
 **Metrics:**
 - `VESPA_METRICS_UPDATE_INTERVAL`: Seconds between metrics updates to autoscaler (default: `1`)
@@ -212,21 +215,48 @@ gather(
 
 ## Important Patterns and Conventions
 
-### 1. Healthcheck-Based Startup
+### 1. Healthcheck-Based Startup with Failure Tolerance
 
-**Pattern**: Always wait for backend health before benchmarking
+**Pattern**: Always wait for backend health before benchmarking, with consecutive failure tracking
 ```python
-await self.__wait_for_backend_ready()  # Poll until HTTP 200
-await self.benchmark_func(...)          # Then benchmark
+# ALWAYS wait for backend ready (even if benchmark is cached)
+await self.__wait_for_backend_ready()  # Poll until HTTP 200, up to VESPA_READY_TIMEOUT
+
+# Run benchmark if not cached
+if not cached:
+    await self.benchmark_func(...)
+
+# THEN start background healthchecks with failure tolerance
+self.__start_healthcheck = True
 ```
 
-**Why**: Models can take minutes to load. Hardcoded delays are unreliable.
+**Why**: Models/data can take minutes to download on EVERY boot. Hardcoded delays are unreliable.
 
-**Behavior**:
-- Polls healthcheck endpoint every 5 seconds
+**Critical Design Decision**:
+- **Always wait for backend ready**, regardless of whether benchmark is cached
+- This ensures backend has time to download models/data on every boot (first boot or restart)
+- Healthchecks only start AFTER backend is confirmed ready
+- Prevents workers from being marked errored during legitimate startup time
+
+**Startup Behavior**:
+- **Detects initial vs resume**: Checks for benchmark cache file (`.has_benchmark`) to determine context
+  - **No cache** → Initial startup (models need downloading)
+  - **Cache exists** → Resume from stopped state (models already on disk)
+- **Separate timeout values** based on context:
+  - Initial startup: `VESPA_READY_TIMEOUT_INITIAL` (default: 1200s / 20 minutes) - models need downloading
+  - Resume from stopped: `VESPA_READY_TIMEOUT_RESUME` (default: 300s / 5 minutes) - models on disk
+- Polls healthcheck endpoint every 5 seconds during startup
 - Uses `VESPA_HEALTHCHECK_ENDPOINT` if set, otherwise defaults to `/health`
-- Fails worker if no response within `VESPA_READY_TIMEOUT`
-- Marks backend as errored and reports to autoscaler
+- If cached: skips benchmark, but still waits for backend ready (with resume timeout)
+- If not cached: waits for ready (with initial timeout), then runs benchmark and caches result
+- Fails worker only if backend doesn't respond within the appropriate timeout
+
+**Post-Startup Healthchecks**:
+- Runs every 10 seconds (configurable via `VESPA_HEALTHCHECK_POLL_INTERVAL`)
+- **Consecutive failure tracking**: Only marks backend as errored after N consecutive failures (default: 3)
+- **Recovers gracefully**: Single transient failures don't kill the worker
+- **Reason**: Prevents false positives from network blips, backend restarts, or temporary overload
+- Resets counter on successful healthcheck and logs recovery
 
 ### 2. Shared Session Safety
 
@@ -549,6 +579,112 @@ vespa/
 
 ## Recent Changes Log
 
+### 2025-12-04: Separate Timeout Values for Initial Startup vs Resume from Stopped
+- **New feature**: Different timeout values for initial startup vs resume from stopped state
+  - `lib/backend.py:69-74`: Added two new dataclass fields:
+    - `ready_timeout_initial` (default: 1200s / 20 min) - for initial startup when models need downloading
+    - `ready_timeout_resume` (default: 300s / 5 min) - for resume when models are already on disk
+  - `lib/backend.py:447-473`: Modified `__wait_for_backend_ready()` to accept `is_resume` parameter and select appropriate timeout
+  - `lib/backend.py:552-601`: Modified `__run_benchmark_on_startup()` to detect initial vs resume by checking for benchmark cache
+    - Logs whether it's "initial startup" or "resume from stopped state"
+    - Passes `is_resume=benchmark_cached` to `__wait_for_backend_ready()`
+- **Environment variables**:
+  - `VESPA_READY_TIMEOUT_INITIAL`: Timeout for initial startup (default: 1200s)
+  - `VESPA_READY_TIMEOUT_RESUME`: Timeout for resume from stopped (default: 300s)
+- **Replaces**: Single `VESPA_READY_TIMEOUT` environment variable (now split into two)
+
+**Rationale**: Initial startup and resume from stopped state have different requirements. On initial startup, models/data need to be downloaded from the internet (can take 15+ minutes). On resume from stopped state, models are already on local disk and only need to be loaded into memory (typically 1-2 minutes). Using the same 20-minute timeout for both cases means workers waste time waiting unnecessarily on resume. Separate timeouts allow faster failure detection on resume while maintaining generous timeouts for initial startup.
+
+**Impact**: Workers that resume from stopped state will now fail faster if the backend doesn't start properly (5 minutes instead of 20 minutes), improving cluster health. Initial startups still get the full 20 minutes for model downloads. Backward compatible - old `VESPA_READY_TIMEOUT` variable is no longer used.
+
+**Behavior Examples:**
+
+**Initial Boot (no cache, models need downloading):**
+```
+[INFO] No benchmark cache - this is initial startup
+[INFO] Waiting for backend ready (initial timeout: 1200s)
+... backend downloads 50GB model for 15 minutes ...
+[INFO] Backend is ready! (took 900s)
+[DEBUG] Running benchmark...
+[INFO] Benchmark completed: 324.97 workload/s
+```
+
+**Resume from Stopped (cache exists, models on disk):**
+```
+[INFO] Benchmark cache found - this is a resume from stopped state
+[INFO] Waiting for backend ready (resume timeout: 300s)
+... backend loads model from disk for 2 minutes ...
+[INFO] Backend is ready! (took 120s)
+[INFO] Using cached benchmark result: 324.97 workload/s
+```
+
+**Configuration:**
+```bash
+# Adjust initial startup timeout (for model downloads)
+export VESPA_READY_TIMEOUT_INITIAL=3600  # 1 hour for very large models
+
+# Adjust resume timeout (for local model loading)
+export VESPA_READY_TIMEOUT_RESUME=600    # 10 minutes for large models on slow disks
+```
+
+### 2025-12-04: Added Consecutive Failure Tracking and Fixed Startup Race Condition
+- **Critical fix**: Always wait for backend ready, even when benchmark is cached
+  - `lib/backend.py:540-579`: Restructured startup to always call `__wait_for_backend_ready()` first
+  - Previous bug: If benchmark cached, skipped ready check entirely, started healthchecks immediately
+  - Problem: On restart, backend needs time to load models, but healthchecks started immediately and marked worker as errored in 30 seconds
+  - Solution: Always wait up to `VESPA_READY_TIMEOUT` for backend ready before starting healthchecks
+  - Cache only affects whether benchmark runs, not whether we wait for backend
+- **New feature**: Healthchecks now track consecutive failures before marking backend as errored
+  - `lib/backend.py:91`: Added `__consecutive_healthcheck_failures` counter
+  - `lib/backend.py:36`: Added `HEALTHCHECK_CONSECUTIVE_FAILURES` configuration (default: 3)
+  - `lib/backend.py:475-522`: Completely rewrote healthcheck logic with failure tracking
+  - Only marks backend as errored after N consecutive failures (configurable)
+  - Resets counter on successful healthcheck
+  - Logs recovery when backend comes back up
+  - Prevents spam by resetting counter after reporting error
+- **Solves production issue**: Single transient failures (network blips, backend restarts) no longer kill workers permanently
+
+**Rationale**: The previous implementation had two critical flaws: (1) When benchmark was cached, it skipped waiting for backend ready entirely, causing workers to fail immediately on restart while backend was still loading; (2) It immediately marked backend as errored on ANY healthcheck failure. The new approach ensures backend always has full startup time (up to VESPA_READY_TIMEOUT) before healthchecks begin, and requires sustained failure (3 consecutive by default) before declaring the backend dead.
+
+**Impact**: Workers now handle both initial startup and restarts correctly. A backend can take 20 minutes to download models on every boot without the worker timing out. Workers are also fault-tolerant to transient issues after startup. This significantly improves reliability in production.
+
+**Behavior Examples:**
+
+**First Boot (no cache):**
+```
+[INFO] Waiting for backend ready (timeout: 1200s)
+... backend downloads 50GB model for 15 minutes ...
+[INFO] Backend is ready! (took 900s)
+[DEBUG] Running benchmark...
+[INFO] Benchmark completed: 324.97 workload/s
+[INFO] Worker ready (benchmark completed), starting periodic healthchecks
+... healthchecks run every 10s with 3-failure tolerance ...
+```
+
+**Restart (with cache):**
+```
+[INFO] Waiting for backend ready (timeout: 1200s)
+... backend loads model from disk for 2 minutes ...
+[INFO] Backend is ready! (took 120s)
+[INFO] Using cached benchmark result: 324.97 workload/s
+[INFO] Worker ready (benchmark cached), starting periodic healthchecks
+... healthchecks run every 10s with 3-failure tolerance ...
+```
+
+**Key point**: In both cases, healthchecks only start AFTER backend is confirmed ready. The backend always gets the full `VESPA_READY_TIMEOUT` to start up.
+
+**Configuration:**
+```bash
+# Adjust startup timeout
+export VESPA_READY_TIMEOUT=3600  # 1 hour for very large models
+
+# Adjust tolerance (higher = more tolerant, lower = fail faster)
+export VESPA_HEALTHCHECK_CONSECUTIVE_FAILURES=5  # Require 5 consecutive failures
+
+# Adjust check frequency
+export VESPA_HEALTHCHECK_POLL_INTERVAL=30  # Check every 30 seconds
+```
+
 ### 2025-12-04: Implemented Query Parameter Auth for GET Requests (with serverless_ prefix)
 - **New feature**: GET/DELETE/HEAD requests now support auth_data via query parameters with `serverless_` prefix
   - `lib/backend.py:118-192`: Complete rewrite of request parsing for bodiless HTTP methods
@@ -638,6 +774,7 @@ curl "http://localhost:3000/v1/models?limit=10&offset=0"
   - `VESPA_HEALTHCHECK_RETRY_INTERVAL` (default: 5)
   - `VESPA_HEALTHCHECK_POLL_INTERVAL` (default: 10)
   - `VESPA_HEALTHCHECK_TIMEOUT` (default: 10)
+  - `VESPA_HEALTHCHECK_CONSECUTIVE_FAILURES` (default: 3)
   - `VESPA_PUBKEY_TIMEOUT` (default: 10)
   - `VESPA_METRICS_RETRY_DELAY` (default: 2)
   - `VESPA_METRICS_UPDATE_INTERVAL` (default: 1)
