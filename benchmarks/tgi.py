@@ -101,10 +101,18 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
     try:
         async with session.post(endpoint, json=warmup_payload) as response:
             if response.status != 200:
-                log.error(f"Warmup failed with status {response.status}")
+                error_body = await response.text()
+                log.error(
+                    f"Warmup failed with status {response.status}\n"
+                    f"Response: {error_body[:500]}"
+                )
                 return 1.0
+            await response.read()  # Ensure response is fully consumed
     except Exception as e:
-        log.error(f"Warmup failed: {e}")
+        log.error(
+            f"Warmup failed with exception: {type(e).__name__}: {str(e)}\n"
+            f"Exception details: {repr(e)}"
+        )
         return 1.0
 
     # Run benchmark
@@ -132,12 +140,17 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
             try:
                 async with session.post(endpoint, json=payload) as response:
                     if response.status == 200:
+                        await response.read()  # Ensure response is fully consumed
                         return workload
                     else:
-                        log.warning(f"Request failed with status {response.status}")
+                        error_body = await response.text()
+                        log.warning(
+                            f"Request failed with status {response.status}\n"
+                            f"Response: {error_body[:200]}"
+                        )
                         return 0
             except Exception as e:
-                log.warning(f"Request failed: {e}")
+                log.warning(f"Request failed: {type(e).__name__}: {str(e)}")
                 return 0
 
         # Run concurrent requests

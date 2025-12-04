@@ -484,6 +484,24 @@ vespa/
 
 ## Recent Changes Log
 
+### 2025-12-04: Enhanced Benchmark Error Handling and Logging
+- **Improved error diagnostics**: All three benchmarks (OpenAI, TGI, ComfyUI) now provide detailed error information
+  - `benchmarks/openai.py:95-110`: Enhanced warmup error handling with response body and exception type
+  - `benchmarks/openai.py:132-146`: Enhanced request error handling with detailed logging
+  - `benchmarks/tgi.py:101-116`: Enhanced warmup error handling with response body and exception type
+  - `benchmarks/tgi.py:140-154`: Enhanced request error handling with detailed logging
+  - `benchmarks/comfyui.py:258-274`: Enhanced warmup error handling, removed bare except clause
+  - `benchmarks/comfyui.py:292-307`: Enhanced request error handling with detailed logging
+- **Error logging improvements**:
+  - Non-200 responses: Now reads and logs response body (first 500 chars for warmup, 200 for requests)
+  - Exceptions: Now logs exception type name (e.g., `ClientConnectorError`), string message, and repr
+  - Proper response consumption: Added `await response.read()` to ensure proper connection cleanup
+- **Fixed pubkey URL**: Added trailing `/` to pubkey fetch URL (`lib/backend.py:533`)
+
+**Rationale**: The old error handling logged empty or unhelpful error messages (e.g., "Warmup failed: "), making debugging impossible on remote servers. The new approach provides full context: HTTP status codes, response bodies, exception types, and detailed error messages.
+
+**Impact**: Much better debuggability for benchmark failures. Users can now see exactly why benchmarks fail (connection errors, API errors, timeouts, etc.) instead of getting empty error messages.
+
 ### 2025-12-03: Prefixed All Environment Variables with VESPA_ and Added Configurability
 - **Environment Variable Naming**: All environment variables now use `VESPA_` prefix for clarity and namespace isolation
   - `BACKEND_URL` → `VESPA_BACKEND_URL`
