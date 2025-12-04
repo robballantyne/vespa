@@ -1,49 +1,59 @@
 """
-Vespa Client - Simple proxy for Vast.ai serverless endpoints
+Vespa Client - Local Proxy for Vast.ai Serverless Endpoints
 
-This client abstracts away the Vast.ai routing complexity:
+This client starts a local HTTP proxy that handles all Vast.ai routing complexity:
 1. Automatically calls /route/ to get worker assignment
 2. Wraps requests in auth_data + payload format
-3. Forwards to worker and returns response
+3. Streams responses transparently
 
-Usage as a proxy server:
+Usage as a module:
+    from client import VastClient
+    import asyncio
+
+    async def main():
+        client = VastClient(endpoint_name="my-endpoint", api_key="YOUR_KEY")
+        await client.start()
+
+        # Use client.url with any SDK
+        from openai import OpenAI
+        openai_client = OpenAI(base_url=f"{client.url}/v1", api_key="not-used")
+
+        response = openai_client.chat.completions.create(
+            model="llama-2-7b",
+            messages=[{"role": "user", "content": "Hello!"}]
+        )
+
+    asyncio.run(main())
+
+Usage as CLI:
     python client.py --endpoint my-endpoint --api-key YOUR_KEY
     # Or with account key (auto-fetches endpoint key):
     python client.py --endpoint my-endpoint --account-key YOUR_ACCOUNT_KEY
     # Or interactive mode:
     python client.py
 
-Usage as a module:
-    from client import VastClient
-
-    client = VastClient(endpoint_name="my-endpoint", api_key="YOUR_KEY")
-
-    # Specify cost via workload parameter
-    response = client.post("/v1/completions", json={"prompt": "test"}, workload=100.0)
-
-    # Or via X-Serverless-Cost header
-    response = client.post("/v1/completions", json={"prompt": "test"},
-                          headers={"X-Serverless-Cost": "100"})
-
-Then just point your app at localhost:8010 instead of the real API!
+Then point your app at localhost:8010!
 
 Workload/Cost:
-- Specify via workload parameter or X-Serverless-Cost header
+- Specify via X-Serverless-Cost header
 - Used for routing and queue estimation
 - Defaults to 1.0 if not specified
 """
 import argparse
+import json
 import logging
 import os
 import sys
+import ssl
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-import requests
-from aiohttp import web
+from aiohttp import web, ClientSession, ClientTimeout, TCPConnector
 import asyncio
+from urllib.parse import urlencode, urlparse, parse_qs
+import certifi
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -52,233 +62,9 @@ log = logging.getLogger(__name__)
 
 class VastClient:
     """
-    Simple client for Vast.ai serverless endpoints.
+    Local proxy server for Vast.ai serverless endpoints.
 
-    Handles routing and authentication automatically.
-    """
-
-    def __init__(
-        self,
-        endpoint_name: str,
-        api_key: str,
-        autoscaler_url: str = "https://run.vast.ai",
-        instance: str = "prod",
-    ):
-        """
-        Initialize Vast.ai client.
-
-        Args:
-            endpoint_name: Name of your Vast.ai endpoint
-            api_key: Endpoint API key (not your account API key!)
-            autoscaler_url: Autoscaler URL (default: https://run.vast.ai)
-            instance: Instance name (prod, alpha, candidate)
-        """
-        self.endpoint_name = endpoint_name
-        self.api_key = api_key
-        self.autoscaler_url = autoscaler_url.rstrip("/")
-        self.instance = instance
-
-        log.debug(f"Initialized VastClient for endpoint: {endpoint_name}")
-
-    def route(self, workload: float = 1.0) -> Optional[Dict[str, Any]]:
-        """
-        Call /route/ to get worker assignment.
-
-        Args:
-            endpoint: API endpoint path (e.g., /v1/completions)
-            workload: Estimated workload units (default: 1.0)
-
-        Returns:
-            Dict with worker URL, signature, and routing info
-        """
-
-        try:
-            response = requests.post(
-                f"{self.autoscaler_url}/route/",
-                json={
-                    "endpoint": self.endpoint_name,
-                    "cost": workload,
-                },
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                timeout=10,
-            )
-
-            if response.status_code != 200:
-                log.error(f"Route failed: {response.status_code} - {response.text}")
-                if response.status_code == 401:
-                    log.error("")
-                    log.error("HINT: 401 Unauthorized usually means:")
-                    log.error("  - You're using the wrong API key type")
-                    log.error("  - Endpoint API key is required, not account API key")
-                    log.error("  - Use --account-key to auto-fetch the correct key")
-                    log.error("")
-                return None
-
-            data = response.json()
-            log.debug(f"Got worker assignment: {data.get('url', 'unknown')}")
-            log.debug(f"Routing response: {data}")
-            return data
-
-        except Exception as e:
-            log.error(f"Route error: {e}")
-            return None
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        data: Optional[bytes] = None,
-        headers: Optional[Dict[str, str]] = None,
-        workload: Optional[float] = None,
-        stream: bool = False,
-    ) -> requests.Response:
-        """
-        Send request through Vast.ai routing.
-
-        Args:
-            method: HTTP method (GET, POST, etc.)
-            path: API path (e.g., /v1/completions)
-            json: JSON payload (optional)
-            data: Raw data payload (optional)
-            headers: Additional headers (optional)
-            workload: Workload units (cost). If not specified, checks X-Serverless-Cost header, defaults to 1.0
-            stream: Stream response (default: False)
-
-        Returns:
-            requests.Response object
-        """
-        # Extract workload from X-Serverless-Cost header if not explicitly provided
-        if workload is None and headers and "X-Serverless-Cost" in headers:
-            try:
-                workload = float(headers["X-Serverless-Cost"])
-            except (ValueError, TypeError):
-                log.warning(f"Invalid X-Serverless-Cost header value: {headers['X-Serverless-Cost']}, using default 1.0")
-                workload = 1.0
-
-        # Default to 1.0 if still not set
-        if workload is None:
-            workload = 1.0
-
-        # Get worker assignment
-        routing_info = self.route(workload)
-        if not routing_info:
-            raise Exception(
-                "Failed to get worker assignment from autoscaler\n"
-                "Possible causes:\n"
-                "  - Wrong API key (are you using endpoint key, not account key?)\n"
-                "  - Endpoint has no healthy workers\n"
-                "  - Endpoint name is incorrect\n"
-                "Check: https://console.vast.ai/endpoints"
-            )
-
-        # Construct request to worker
-        # IMPORTANT: Use the exact values from routing_info that were signed by the autoscaler
-        # Do NOT modify these values (including types!) or signature verification will fail
-        worker_url = routing_info["url"]
-        auth_data = {
-            "cost": routing_info.get("cost", workload),  # Keep original type (number, not string)!
-            "endpoint": routing_info.get("endpoint", self.endpoint_name),  # Must match what was signed
-            "reqnum": routing_info.get("reqnum", 0),
-            "request_idx": routing_info.get("request_idx", 0),
-            "signature": routing_info.get("signature", ""),
-            "url": worker_url,
-        }
-
-        log.debug(f"Auth data for signature verification: {auth_data}")
-        log.debug(f"Request path: {path}")
-
-        # Handle GET/DELETE/HEAD differently (no body, use query params)
-        if method in ["GET", "DELETE", "HEAD"]:
-            # Encode auth_data as query parameters (prefixed with serverless_ to avoid conflicts)
-            from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
-
-            # Parse path to separate base path from existing query parameters
-            parsed = urlparse(path)
-            base_path = parsed.path
-            existing_params = parse_qs(parsed.query, keep_blank_values=True)
-
-            # Flatten existing params (parse_qs returns lists)
-            flat_existing = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
-
-            # Serverless auth params (prefixed to avoid conflicts)
-            query_params = {
-                "serverless_cost": auth_data["cost"],
-                "serverless_endpoint": auth_data["endpoint"],
-                "serverless_reqnum": str(auth_data["reqnum"]),
-                "serverless_request_idx": str(auth_data["request_idx"]),
-                "serverless_signature": auth_data["signature"],
-                "serverless_url": auth_data["url"],
-            }
-
-            # Add existing query params from path (unprefixed - these go to backend)
-            query_params.update(flat_existing)
-
-            # Add payload fields as additional query params (unprefixed - these go to backend)
-            if json:
-                query_params.update(json)
-
-            # Build full URL with query params
-            full_url = f"{worker_url}{base_path}?{urlencode(query_params)}"
-
-            log.debug(f"{method} {full_url}")
-            response = requests.request(
-                method,
-                full_url,
-                headers=headers,
-                timeout=300,
-                stream=stream,
-            )
-        else:
-            # POST/PUT/PATCH: use JSON body
-            payload = {
-                "auth_data": auth_data,
-                "payload": json or {},
-            }
-
-            full_url = f"{worker_url}{path}"
-            log.debug(f"{method} {full_url}")
-            response = requests.request(
-                method,
-                full_url,
-                json=payload if json else None,
-                data=data,
-                headers=headers,
-                timeout=300,  # Long timeout for model inference
-                stream=stream,
-            )
-
-        return response
-
-    def get(self, path: str, **kwargs) -> requests.Response:
-        """GET request"""
-        return self.request("GET", path, **kwargs)
-
-    def post(self, path: str, **kwargs) -> requests.Response:
-        """POST request"""
-        return self.request("POST", path, **kwargs)
-
-    def put(self, path: str, **kwargs) -> requests.Response:
-        """PUT request"""
-        return self.request("PUT", path, **kwargs)
-
-    def patch(self, path: str, **kwargs) -> requests.Response:
-        """PATCH request"""
-        return self.request("PATCH", path, **kwargs)
-
-    def delete(self, path: str, **kwargs) -> requests.Response:
-        """DELETE request"""
-        return self.request("DELETE", path, **kwargs)
-
-
-class VastProxy:
-    """
-    Local HTTP proxy server that forwards to Vast.ai endpoints.
-
-    Start this proxy and point your app at localhost:8010 - all the
-    Vast.ai routing complexity is handled automatically!
+    Start the proxy and use client.url with any HTTP client or SDK.
     """
 
     def __init__(
@@ -288,22 +74,122 @@ class VastProxy:
         port: int = 8010,
         host: str = "127.0.0.1",
         autoscaler_url: str = "https://run.vast.ai",
+        instance: str = "prod",
     ):
-        self.client = VastClient(endpoint_name, api_key, autoscaler_url)
+        """
+        Initialize Vast.ai client proxy.
+
+        Args:
+            endpoint_name: Name of your Vast.ai endpoint
+            api_key: Endpoint API key (not your account API key!)
+            port: Local proxy port (default: 8010)
+            host: Local proxy host (default: 127.0.0.1)
+            autoscaler_url: Autoscaler URL (default: https://run.vast.ai)
+            instance: Instance name (prod, alpha, candidate)
+        """
+        self.endpoint_name = endpoint_name
+        self.api_key = api_key
         self.port = port
         self.host = host
+        self.autoscaler_url = autoscaler_url.rstrip("/")
+        self.instance = instance
 
-    async def handle_request(self, request: web.Request) -> web.Response:
-        """Forward incoming requests to Vast.ai"""
-        # Include query string in path
-        path = request.path_qs  # This includes query parameters
+        # HTTP client for routing calls
+        self._session: Optional[ClientSession] = None
+
+        # Server components
+        self._app: Optional[web.Application] = None
+        self._runner: Optional[web.AppRunner] = None
+        self._site: Optional[web.TCPSite] = None
+
+        log.debug(f"Initialized VastClient for endpoint: {endpoint_name}")
+
+    @property
+    def url(self) -> str:
+        """Get the local proxy URL to use with SDKs."""
+        return f"http://{self.host}:{self.port}"
+
+    async def _ensure_session(self):
+        """Ensure HTTP session is created."""
+        if self._session is None:
+            timeout = ClientTimeout(total=300)  # 5 min for long inference
+
+            # Create SSL context that uses certifi's certificate bundle
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+            connector = TCPConnector(
+                limit=100,
+                limit_per_host=20,
+                ssl=ssl_context
+            )
+            self._session = ClientSession(timeout=timeout, connector=connector)
+
+    async def route(self, workload: float = 1.0) -> Optional[Dict[str, Any]]:
+        """
+        Call /route/ to get worker assignment.
+
+        Args:
+            workload: Estimated workload units (default: 1.0)
+
+        Returns:
+            Dict with worker URL, signature, and routing info
+        """
+        await self._ensure_session()
+        assert self._session is not None, "Session should be initialized"
+
+        try:
+            async with self._session.post(
+                f"{self.autoscaler_url}/route/",
+                json={
+                    "endpoint": self.endpoint_name,
+                    "cost": workload,
+                },
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=ClientTimeout(total=10),
+            ) as response:
+                # Read response body first
+                text = await response.text()
+
+                if response.status != 200:
+                    log.error(f"Route failed: {response.status} - {text}")
+                    if response.status == 401:
+                        log.error("")
+                        log.error("HINT: 401 Unauthorized usually means:")
+                        log.error("  - You're using the wrong API key type")
+                        log.error("  - Endpoint API key is required, not account API key")
+                        log.error("  - Use --account-key to auto-fetch the correct key")
+                        log.error("")
+                    return None
+
+                # Try to parse as JSON (be lenient with Content-Type)
+                try:
+                    data = json.loads(text)
+                    log.debug(f"Got worker assignment: {data.get('url', 'unknown')}")
+                    log.debug(f"Routing response: {data}")
+                    return data
+                except json.JSONDecodeError as e:
+                    # Only log Content-Type if JSON parsing fails
+                    content_type = response.content_type or ""
+                    log.error(f"Failed to decode JSON response (Content-Type: {content_type}): {e}")
+                    log.error(f"Response body: {text[:500]}")
+                    return None
+
+        except Exception as e:
+            log.error(f"Route error: {e}", exc_info=True)
+            return None
+
+    async def _handle_request(self, request: web.Request) -> web.StreamResponse:
+        """Forward incoming requests to Vast.ai workers with streaming support."""
+        path = request.path_qs  # Include query parameters
         method = request.method
 
         log.info(f"{method} {path}")
 
         try:
             # Extract workload from X-Serverless-Cost header if present
-            workload = None
+            workload = 1.0
             if "X-Serverless-Cost" in request.headers:
                 try:
                     workload = float(request.headers["X-Serverless-Cost"])
@@ -311,62 +197,228 @@ class VastProxy:
                 except (ValueError, TypeError):
                     log.warning(f"Invalid X-Serverless-Cost header: {request.headers['X-Serverless-Cost']}")
 
-            # Read request body
+            # Get worker assignment
+            routing_info = await self.route(workload)
+            if not routing_info:
+                return web.Response(
+                    status=503,
+                    text="Failed to get worker assignment from autoscaler\n"
+                         "Possible causes:\n"
+                         "  - Wrong API key (are you using endpoint key, not account key?)\n"
+                         "  - Endpoint has no healthy workers\n"
+                         "  - Endpoint name is incorrect\n"
+                         "Check: https://console.vast.ai/endpoints"
+                )
+
+            # Construct auth_data from routing response
+            worker_url = routing_info["url"]
+            auth_data = {
+                "cost": routing_info.get("cost", workload),
+                "endpoint": routing_info.get("endpoint", self.endpoint_name),
+                "reqnum": routing_info.get("reqnum", 0),
+                "request_idx": routing_info.get("request_idx", 0),
+                "signature": routing_info.get("signature", ""),
+                "url": worker_url,
+            }
+
+            log.debug(f"Auth data for signature verification: {auth_data}")
+            log.debug(f"Forwarding to worker: {worker_url}{path}")
+
+            # Read request body if present
+            json_data = None
+            body_bytes = None
+
             if request.can_read_body:
                 body_bytes = await request.read()
-                try:
-                    json_data = await request.json()
-                except:
-                    json_data = None
+                if body_bytes:
+                    try:
+                        json_data = json.loads(body_bytes)
+                    except:
+                        pass
+
+            await self._ensure_session()
+            assert self._session is not None, "Session should be initialized"
+
+            # Handle GET/DELETE/HEAD differently (no body, use query params)
+            if method in ["GET", "DELETE", "HEAD"]:
+                # Parse path to separate base path from existing query parameters
+                parsed = urlparse(path)
+                base_path = parsed.path
+                existing_params = parse_qs(parsed.query, keep_blank_values=True)
+
+                # Flatten existing params (parse_qs returns lists)
+                flat_existing = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
+
+                # Serverless auth params (prefixed to avoid conflicts)
+                query_params = {
+                    "serverless_cost": auth_data["cost"],
+                    "serverless_endpoint": auth_data["endpoint"],
+                    "serverless_reqnum": str(auth_data["reqnum"]),
+                    "serverless_request_idx": str(auth_data["request_idx"]),
+                    "serverless_signature": auth_data["signature"],
+                    "serverless_url": auth_data["url"],
+                }
+
+                # Add existing query params from path (unprefixed - these go to backend)
+                query_params.update(flat_existing)
+
+                # Add payload fields as additional query params (unprefixed - these go to backend)
+                if json_data:
+                    query_params.update(json_data)
+
+                # Build full URL with query params
+                full_url = f"{worker_url}{base_path}?{urlencode(query_params)}"
+
+                async with self._session.request(
+                    method,
+                    full_url,
+                    headers=dict(request.headers),
+                ) as worker_response:
+                    return await self._stream_response(worker_response, request)
+
             else:
-                body_bytes = None
-                json_data = None
+                # POST/PUT/PATCH: use JSON body
+                payload_data = {
+                    "auth_data": auth_data,
+                    "payload": json_data or {},
+                }
 
-            # Forward through Vast.ai
-            response = self.client.request(
-                method=method,
-                path=path,
-                json=json_data,
-                data=body_bytes if not json_data else None,
-                headers=dict(request.headers),
-                workload=workload,
-            )
+                full_url = f"{worker_url}{path}"
 
-            # Return response
-            return web.Response(
-                body=response.content,
-                status=response.status_code,
-                headers=dict(response.headers),
-            )
+                # Filter headers - only forward safe headers
+                forward_headers = {}
+                safe_headers = {
+                    "user-agent", "accept", "accept-encoding", "accept-language",
+                    "x-serverless-cost"  # Custom workload header
+                }
+                for key, value in request.headers.items():
+                    if key.lower() in safe_headers:
+                        forward_headers[key] = value
+
+                # Ensure Content-Type is set to application/json
+                forward_headers["Content-Type"] = "application/json"
+
+                log.debug(f"Sending to worker: {full_url}")
+                log.debug(f"Payload: {payload_data}")
+
+                async with self._session.request(
+                    method,
+                    full_url,
+                    json=payload_data,
+                    headers=forward_headers,
+                ) as worker_response:
+                    return await self._stream_response(worker_response, request)
 
         except Exception as e:
-            log.error(f"Request failed: {e}")
+            log.error(f"Request failed: {e}", exc_info=True)
             return web.Response(
                 status=500,
                 text=f"Proxy error: {str(e)}",
             )
 
+    async def _stream_response(
+        self,
+        worker_response: Any,
+        client_request: web.Request
+    ) -> web.StreamResponse:
+        """
+        Stream response from worker to client.
+
+        Detects streaming responses and handles them appropriately.
+        """
+        # Check if response is streaming
+        content_type = worker_response.content_type or ""
+        transfer_encoding = worker_response.headers.get("Transfer-Encoding", "")
+
+        is_streaming = (
+            content_type == "text/event-stream"
+            or content_type == "application/x-ndjson"
+            or transfer_encoding == "chunked"
+            or "stream" in content_type.lower()
+        )
+
+        # Prepare response headers (exclude hop-by-hop headers)
+        response_headers = {}
+        hop_by_hop = {
+            "connection", "keep-alive", "proxy-authenticate",
+            "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"
+        }
+        for key, value in worker_response.headers.items():
+            if key.lower() not in hop_by_hop:
+                response_headers[key] = value
+
+        if is_streaming:
+            log.debug("Streaming response detected")
+
+            # Create streaming response
+            response = web.StreamResponse(
+                status=worker_response.status,
+                headers=response_headers,
+            )
+
+            await response.prepare(client_request)
+
+            # Stream chunks
+            try:
+                async for chunk in worker_response.content.iter_any():
+                    if chunk:
+                        await response.write(chunk)
+            except Exception as e:
+                log.error(f"Streaming error: {e}")
+            finally:
+                await response.write_eof()
+
+            return response
+        else:
+            # Non-streaming: read full response
+            body = await worker_response.read()
+            return web.Response(
+                body=body,
+                status=worker_response.status,
+                headers=response_headers,
+            )
+
     async def start(self):
-        """Start the proxy server"""
-        app = web.Application()
-        app.router.add_route("*", "/{path:.*}", self.handle_request)
+        """Start the proxy server."""
+        # Create app
+        self._app = web.Application()
+        self._app.router.add_route("*", "/{path:.*}", self._handle_request)
 
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
+        # Setup runner
+        self._runner = web.AppRunner(self._app)
+        await self._runner.setup()
 
-        log.info(f"Vast.ai proxy started on http://{self.host}:{self.port}")
-        log.info(f"Forwarding to endpoint: {self.client.endpoint_name}")
-        log.info(f"Point your app at http://{self.host}:{self.port} instead of the real API")
+        # Start site
+        self._site = web.TCPSite(self._runner, self.host, self.port)
+        await self._site.start()
 
-        # Keep running
+        log.info(f"Vast.ai proxy started on {self.url}")
+        log.info(f"Forwarding to endpoint: {self.endpoint_name}")
+        log.info(f"Use {self.url} as your base URL for API calls")
+
+    async def stop(self):
+        """Stop the proxy server."""
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+
+        if self._session:
+            await self._session.close()
+            self._session = None
+
+        log.info("Proxy stopped")
+
+    async def run_forever(self):
+        """Start the proxy and keep it running."""
+        await self.start()
+
         try:
             while True:
                 await asyncio.sleep(3600)
         except KeyboardInterrupt:
             log.info("Shutting down proxy...")
-            await runner.cleanup()
+        finally:
+            await self.stop()
 
 
 def get_api_key_from_file() -> Optional[str]:
@@ -408,6 +460,7 @@ def fetch_endpoint_key(account_key: str, endpoint_name: str, instance: str = "pr
 def list_endpoints(account_key: str, instance: str = "prod") -> List[str]:
     """List all available endpoints"""
     try:
+        import requests
         from utils.endpoint_util import Endpoint
         headers = {"Authorization": f"Bearer {account_key}"}
         url = f"{Endpoint.get_server_url(instance)}?autoscaler_instance={instance}"
@@ -633,7 +686,7 @@ Examples:
 
     # Start proxy
     log.info(f"Starting proxy for endpoint: {endpoint_name}")
-    proxy = VastProxy(
+    client = VastClient(
         endpoint_name=endpoint_name,
         api_key=endpoint_key,
         port=args.port,
@@ -641,7 +694,7 @@ Examples:
         autoscaler_url=args.autoscaler_url,
     )
 
-    asyncio.run(proxy.start())
+    asyncio.run(client.run_forever())
 
 
 if __name__ == "__main__":

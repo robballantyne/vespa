@@ -1,6 +1,6 @@
 # Vespa Client - Zero-Barrier Vast.ai Access
 
-Simple client proxy for Vast.ai serverless endpoints. Eliminates all routing complexity.
+Simple client proxy for Vast.ai serverless endpoints. Starts a local HTTP proxy that handles all routing complexity.
 
 ## Quick Start (3 Ways)
 
@@ -40,6 +40,16 @@ Traditional approach if you already have the endpoint API key.
 ---
 
 ## Key Features
+
+### ✅ Native Streaming Support
+
+The proxy automatically detects and streams responses:
+- Server-Sent Events (SSE)
+- NDJSON streams
+- Chunked transfer encoding
+- Any response with "stream" in Content-Type
+
+No buffering - tokens flow through as they're generated.
 
 ### ✅ No API Key Confusion
 
@@ -179,16 +189,39 @@ Available endpoints (3):
 
 ## Using the Proxy
 
-Once started, point your application at the proxy:
+Once started, the proxy runs locally and forwards all requests to Vast.ai.
 
-### HTTP Requests
+### With OpenAI SDK
+
+```python
+from openai import OpenAI
+
+# Point at the proxy - it handles all Vast.ai routing!
+client = OpenAI(
+    base_url="http://localhost:8010/v1",
+    api_key="not-used"  # Proxy handles authentication
+)
+
+# Use normally - streaming works automatically
+response = client.chat.completions.create(
+    model="llama-2-7b",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,  # Native streaming support!
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### With Requests
 
 ```python
 import requests
 
-# Your code stays exactly the same - just change the URL!
+# Regular request (default workload=1.0)
 response = requests.post(
-    "http://localhost:8010/v1/chat/completions",  # <- localhost instead of API
+    "http://localhost:8010/v1/chat/completions",
     json={
         "model": "llama-2-7b",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -209,7 +242,7 @@ import requests
 # Specify cost explicitly via header
 response = requests.post(
     "http://localhost:8010/v1/completions",
-    headers={"X-Serverless-Cost": "500"},  # Indicate this request will use 500 workload units
+    headers={"X-Serverless-Cost": "500"},  # Indicate 500 workload units
     json={
         "prompt": "Write a long story",
         "max_tokens": 1000,
@@ -222,30 +255,12 @@ response = requests.post(
 - Used for queue time estimation and scaling decisions
 - Default is 1.0 if not specified
 
-### OpenAI SDK
-
-```python
-from openai import OpenAI
-
-# Point at proxy
-client = OpenAI(
-    base_url="http://localhost:8010/v1",
-    api_key="not-used"  # Proxy handles auth
-)
-
-response = client.chat.completions.create(
-    model="llama-2-7b",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-
-print(response.choices[0].message.content)
-```
-
-### Streaming
+### Streaming Responses
 
 ```python
 import requests
 
+# Streaming is detected automatically!
 response = requests.post(
     "http://localhost:8010/v1/completions",
     json={"prompt": "test", "stream": True},
@@ -260,62 +275,99 @@ for chunk in response.iter_content(chunk_size=None):
 
 ## Python Module Usage
 
-Import directly for more control:
+Use the client as a module for more control:
 
 ```python
 from client import VastClient
+import asyncio
 
-# Initialize with account key (auto-fetches endpoint key)
-from utils.endpoint_util import Endpoint
-endpoint_key = Endpoint.get_endpoint_api_key(
-    endpoint_name="my-endpoint",
-    account_api_key="YOUR_ACCOUNT_KEY",
-    instance="prod"
-)
+async def main():
+    # Initialize client
+    client = VastClient(
+        endpoint_name="my-endpoint",
+        api_key="YOUR_ENDPOINT_KEY",
+        port=8010,  # Optional, defaults to 8010
+        host="127.0.0.1",  # Optional
+    )
 
-# Or initialize with endpoint key directly
-client = VastClient(
-    endpoint_name="my-endpoint",
-    api_key=endpoint_key,
-)
+    # Start the proxy
+    await client.start()
 
-# Make requests
-response = client.post(
-    "/v1/completions",
-    json={
-        "prompt": "Hello",
-        "max_tokens": 50,
-    }
-)
+    # Now use client.url with any SDK!
+    print(f"Proxy running at: {client.url}")
 
-print(response.json())
+    # Example with OpenAI SDK
+    from openai import OpenAI
+    openai_client = OpenAI(
+        base_url=f"{client.url}/v1",
+        api_key="not-used"
+    )
+
+    response = openai_client.chat.completions.create(
+        model="llama-2-7b",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+
+    print(response.choices[0].message.content)
+
+    # Keep running (or await client.stop() to shut down)
+    await asyncio.sleep(3600)
+    await client.stop()
+
+# Run it
+asyncio.run(main())
 ```
 
-### All HTTP Methods
+### Auto-Fetching Endpoint Key
 
 ```python
-client.get("/health")
-client.post("/v1/completions", json={...})
-client.put("/update", json={...})
-client.patch("/modify", json={...})
-client.delete("/remove")
+from client import VastClient, fetch_endpoint_key
+import asyncio
+
+async def main():
+    # Fetch endpoint key using account key
+    account_key = "YOUR_ACCOUNT_KEY"
+    endpoint_key = fetch_endpoint_key(
+        account_key=account_key,
+        endpoint_name="my-endpoint",
+        instance="prod"  # or "alpha", "candidate"
+    )
+
+    # Start client
+    client = VastClient(
+        endpoint_name="my-endpoint",
+        api_key=endpoint_key,
+    )
+
+    await client.start()
+    print(f"Proxy URL: {client.url}")
+
+    # Use with any HTTP client
+    import requests
+    response = requests.get(f"{client.url}/v1/models")
+    print(response.json())
+
+    await client.stop()
+
+asyncio.run(main())
 ```
 
-### Specifying Workload Cost
+### Running Forever
 
 ```python
-# Option 1: Via workload parameter
-client.post("/v1/completions", json={...}, workload=500.0)
+from client import VastClient
+import asyncio
 
-# Option 2: Via X-Serverless-Cost header (useful with proxy)
-client.post(
-    "/v1/completions",
-    json={...},
-    headers={"X-Serverless-Cost": "500"}
-)
+async def main():
+    client = VastClient(
+        endpoint_name="my-endpoint",
+        api_key="YOUR_KEY",
+    )
 
-# Option 3: Default to 1.0 (if not specified)
-client.post("/v1/completions", json={...})  # Uses workload=1.0
+    # Start and run until interrupted
+    await client.run_forever()
+
+asyncio.run(main())
 ```
 
 ---
@@ -427,6 +479,15 @@ python client.py --endpoint my-endpoint --account-key YOUR_KEY
 - Verify endpoint name is correct
 - Check endpoint exists in console.vast.ai
 
+### Streaming Not Working
+
+**Problem:** Responses are buffered instead of streaming
+
+**Solution:** The proxy auto-detects streaming. Make sure:
+- Your backend sends appropriate headers (Content-Type: text/event-stream)
+- Your client uses `stream=True` (requests) or equivalent
+- You're iterating over chunks, not reading the full response
+
 ---
 
 ## Examples
@@ -450,12 +511,19 @@ curl http://localhost:8010/v1/completions \
   -H "Content-Type: application/json" \
   -H "X-Serverless-Cost: 500" \
   -d '{"prompt": "Long story", "max_tokens": 2000}'
+
+# Test streaming
+curl http://localhost:8010/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "test", "stream": true}' \
+  --no-buffer
 ```
 
 **Note:**
-- The client automatically handles GET/DELETE/HEAD requests by encoding auth_data as query parameters
+- The proxy automatically handles GET/DELETE/HEAD requests by encoding auth_data as query parameters
 - Use `X-Serverless-Cost` header to specify workload units (defaults to 1.0 if not specified)
 - Workload cost is used for routing and queue estimation
+- Streaming is detected automatically based on response headers
 
 ### Production Setup
 
@@ -482,6 +550,26 @@ python client.py --endpoint endpoint2 --account-key KEY --port 8011 &
 # App can use both
 curl http://localhost:8010/v1/completions -d '{...}'
 curl http://localhost:8011/v1/completions -d '{...}'
+```
+
+### With Different SDKs
+
+```python
+# OpenAI SDK
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8010/v1", api_key="x")
+
+# Anthropic SDK (if your backend is compatible)
+from anthropic import Anthropic
+client = Anthropic(base_url="http://localhost:8010", api_key="x")
+
+# LangChain
+from langchain.llms import OpenAI
+llm = OpenAI(openai_api_base="http://localhost:8010/v1", openai_api_key="x")
+
+# Plain requests
+import requests
+requests.post("http://localhost:8010/v1/chat/completions", json={...})
 ```
 
 ---
@@ -528,53 +616,80 @@ response = requests.post(routing["url"], json=payload)
 ```bash
 # Start proxy once
 python client.py
-
-# Use normally
 ```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8010/v1", api_key="x")
+response = client.chat.completions.create(
+    model="llama-2-7b",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+**Total:** 1 command + 5 lines of normal SDK code
+
+---
+
+## Advanced Features
+
+### Async Context Manager Pattern
+
+```python
+from client import VastClient
+import asyncio
+
+async def main():
+    client = VastClient(endpoint_name="my-endpoint", api_key="KEY")
+
+    try:
+        await client.start()
+
+        # Your code here
+        print(f"Use: {client.url}")
+        await asyncio.sleep(3600)
+
+    finally:
+        await client.stop()
+
+asyncio.run(main())
+```
+
+### Custom Headers Pass-Through
+
+The proxy forwards all headers to workers:
 
 ```python
 import requests
 
 response = requests.post(
     "http://localhost:8010/v1/completions",
-    json={"prompt": "test", "max_tokens": 100}
+    headers={
+        "X-Serverless-Cost": "500",  # Used by proxy for routing
+        "X-Custom-Header": "value",   # Passed through to worker
+    },
+    json={...}
 )
 ```
 
-**Total:** 1 command + 5 lines of normal code
-
----
-
-## Advanced
-
-### Custom Routing
+### Workload Estimation
 
 ```python
-from client import VastClient
+# For token-based workload:
+# Estimate tokens, set as cost
+estimated_tokens = len(prompt.split()) * 1.5 + max_tokens
+headers = {"X-Serverless-Cost": str(estimated_tokens)}
 
-client = VastClient(endpoint_name="my-endpoint", api_key="KEY")
+# For request-based workload:
+# Each request = 1.0 workload
+headers = {"X-Serverless-Cost": "1.0"}
 
-# Get routing info manually
-routing = client.route(endpoint="/v1/completions", workload=500.0)
-print(routing)
-# {'url': 'https://worker-ip:3000', 'signature': '...', ...}
-```
-
-### Custom Headers
-
-```python
-response = client.post(
-    "/endpoint",
-    json={...},
-    headers={"X-Custom": "value"},
+response = requests.post(
+    "http://localhost:8010/endpoint",
+    headers=headers,
+    json={...}
 )
-```
-
-### Timeouts
-
-```python
-# Default timeout is 300 seconds
-response = client.post("/endpoint", json={...}, timeout=60)
 ```
 
 ---
@@ -588,6 +703,38 @@ response = client.post("/endpoint", json={...}, timeout=60)
 - **Flexible** - CLI, environment, file, or interactive
 - **Helpful** - Clear error messages guide you
 - **Standard** - Use any HTTP client/SDK normally
+- **Streaming** - Native support for SSE, NDJSON, chunked responses
+- **Simple** - Just `client.url` - works with any SDK
+
+---
+
+## Architecture
+
+```
+Your App (OpenAI SDK, requests, etc.)
+    ↓
+Local Proxy (localhost:8010)
+    ↓ (calls /route/)
+Vast.ai Autoscaler (routing + auth)
+    ↓ (returns worker URL + signature)
+Local Proxy (wraps in auth_data)
+    ↓ (forwards with auth)
+Vespa Worker (validates signature)
+    ↓ (proxies to backend)
+Your Model Backend (vLLM, TGI, etc.)
+    ↓ (streams response)
+Vespa Worker (streams back)
+    ↓
+Local Proxy (streams to you)
+    ↓
+Your App (receives tokens as generated)
+```
+
+**Key benefits:**
+- All complexity hidden behind localhost proxy
+- Streaming works transparently
+- Use any SDK without modifications
+- Single source of truth for routing logic
 
 ---
 
