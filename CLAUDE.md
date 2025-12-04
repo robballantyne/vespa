@@ -278,14 +278,21 @@ def __check_signature(self, auth_data: AuthData) -> bool:
 **Pattern**: User-provided async function measuring throughput
 ```python
 async def benchmark(backend_url: str, session: ClientSession) -> float:
-    # Run performance tests
-    # Return max_throughput in workload units per second
+    # backend_url is for logging only
+    # session already has base URL configured
+    endpoint = "/v1/completions"  # Use relative path, NOT absolute URL
+
+    async with session.post(endpoint, json=payload) as response:
+        # Run performance tests
+
     return tokens_per_second  # or requests/sec, or custom metric
 ```
 
 **Why**: Different APIs have different performance characteristics. User defines what "workload" means.
 
 **Important**:
+- **CRITICAL**: The `session` is created with `ClientSession(backend_url, ...)`, so you MUST pass relative paths (e.g., `/v1/completions`) to `session.post()`, NOT absolute URLs (e.g., `http://localhost:8000/v1/completions`). Passing absolute URLs will trigger an AssertionError in aiohttp.
+- The `backend_url` parameter is provided for logging purposes only
 - Benchmark result is saved to `.has_benchmark` file (cached across restarts)
 - Throughput reported to autoscaler for scaling decisions
 - Must match the workload units used in `auth_data.cost`
@@ -484,23 +491,24 @@ vespa/
 
 ## Recent Changes Log
 
-### 2025-12-04: Enhanced Benchmark Error Handling and Logging
-- **Improved error diagnostics**: All three benchmarks (OpenAI, TGI, ComfyUI) now provide detailed error information
-  - `benchmarks/openai.py:95-110`: Enhanced warmup error handling with response body and exception type
-  - `benchmarks/openai.py:132-146`: Enhanced request error handling with detailed logging
-  - `benchmarks/tgi.py:101-116`: Enhanced warmup error handling with response body and exception type
-  - `benchmarks/tgi.py:140-154`: Enhanced request error handling with detailed logging
-  - `benchmarks/comfyui.py:258-274`: Enhanced warmup error handling, removed bare except clause
-  - `benchmarks/comfyui.py:292-307`: Enhanced request error handling with detailed logging
-- **Error logging improvements**:
+### 2025-12-04: Fixed Benchmark Session Usage and Enhanced Error Handling
+- **Fixed critical bug**: All benchmarks now use relative paths instead of absolute URLs
+  - `benchmarks/openai.py:73`: Changed `endpoint = f"{backend_url}/v1/completions"` to `endpoint = "/v1/completions"`
+  - `benchmarks/tgi.py:78`: Changed `endpoint = f"{backend_url}/generate"` to `endpoint = "/generate"`
+  - `benchmarks/comfyui.py:173`: Changed `endpoint = f"{backend_url}/runsync"` to `endpoint = "/runsync"`
+  - **Root cause**: Session is created with `ClientSession(backend_url, ...)`, so aiohttp expects relative paths
+  - **Error**: Passing absolute URLs triggered `AssertionError: assert not url.is_absolute() and url.path.startswith("/")`
+- **Improved error diagnostics**: All three benchmarks now provide detailed error information
+  - Added full traceback logging to all benchmark error handlers
   - Non-200 responses: Now reads and logs response body (first 500 chars for warmup, 200 for requests)
-  - Exceptions: Now logs exception type name (e.g., `ClientConnectorError`), string message, and repr
+  - Exceptions: Now logs exception type name, string message, repr, and full traceback
   - Proper response consumption: Added `await response.read()` to ensure proper connection cleanup
 - **Fixed pubkey URL**: Added trailing `/` to pubkey fetch URL (`lib/backend.py:533`)
+- **Documentation**: Updated benchmark pattern documentation to emphasize relative path requirement
 
-**Rationale**: The old error handling logged empty or unhelpful error messages (e.g., "Warmup failed: "), making debugging impossible on remote servers. The new approach provides full context: HTTP status codes, response bodies, exception types, and detailed error messages.
+**Rationale**: The benchmarks were constructing absolute URLs and passing them to a ClientSession that already had a base URL configured. This violated aiohttp's API contract and caused silent AssertionError failures. The enhanced error logging helped diagnose this issue.
 
-**Impact**: Much better debuggability for benchmark failures. Users can now see exactly why benchmarks fail (connection errors, API errors, timeouts, etc.) instead of getting empty error messages.
+**Impact**: Benchmarks now work correctly. This was a critical bug that prevented any benchmark from running. Enhanced error diagnostics made debugging possible on remote servers.
 
 ### 2025-12-03: Prefixed All Environment Variables with VESPA_ and Added Configurability
 - **Environment Variable Naming**: All environment variables now use `VESPA_` prefix for clarity and namespace isolation

@@ -62,17 +62,17 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
     Benchmark an OpenAI-compatible API.
 
     Args:
-        backend_url: Base URL of the backend server
-        session: aiohttp ClientSession for making requests
+        backend_url: Base URL of the backend server (used for logging only)
+        session: aiohttp ClientSession for making requests (already configured with base URL)
         runs: Number of benchmark runs (default: 8)
 
     Returns:
         max_throughput: Maximum workload processed per second
     """
     model_name = os.environ.get("MODEL_NAME", "model")
-    endpoint = f"{backend_url}/v1/completions"
+    endpoint = "/v1/completions"
 
-    log.info(f"Benchmarking OpenAI API at {endpoint}")
+    log.info(f"Benchmarking OpenAI API at {backend_url}{endpoint}")
 
     # Generate test prompt
     system_prompt = """You are a helpful AI assistant. You have access to the following knowledge base:

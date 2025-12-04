@@ -68,16 +68,16 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
     Benchmark TGI API.
 
     Args:
-        backend_url: Base URL of the backend server (e.g., "http://localhost:8080")
-        session: aiohttp ClientSession for making requests
+        backend_url: Base URL of the backend server (used for logging only)
+        session: aiohttp ClientSession for making requests (already configured with base URL)
         runs: Number of benchmark runs (default: 8)
 
     Returns:
         max_throughput: Maximum tokens processed per second
     """
-    endpoint = f"{backend_url}/generate"
+    endpoint = "/generate"
 
-    log.info(f"Benchmarking TGI API at {endpoint}")
+    log.info(f"Benchmarking TGI API at {backend_url}{endpoint}")
 
     # Generate test prompt
     system_prompt = """You are a helpful AI assistant. You have access to the following knowledge base:

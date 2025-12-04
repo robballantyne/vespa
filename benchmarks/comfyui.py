@@ -162,17 +162,17 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
     Benchmark ComfyUI API.
 
     Args:
-        backend_url: Base URL of the backend server (e.g., "http://localhost:8188")
-        session: aiohttp ClientSession for making requests
+        backend_url: Base URL of the backend server (used for logging only)
+        session: aiohttp ClientSession for making requests (already configured with base URL)
         runs: Number of benchmark runs (default: 3, fewer because image gen is slow)
 
     Returns:
         max_throughput: Maximum workload units processed per second
     """
     # ComfyUI typically uses port 8188 and has /runsync endpoint for synchronous execution
-    endpoint = f"{backend_url}/runsync"
+    endpoint = "/runsync"
 
-    log.info(f"Benchmarking ComfyUI API at {endpoint}")
+    log.info(f"Benchmarking ComfyUI API at {backend_url}{endpoint}")
 
     # Standard benchmark parameters
     width = 512

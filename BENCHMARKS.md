@@ -135,13 +135,17 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
     Benchmark My API.
 
     Args:
-        backend_url: Base URL of the backend (e.g., "http://localhost:8000")
-        session: aiohttp ClientSession for making requests
+        backend_url: Base URL of the backend (used for logging only)
+        session: aiohttp ClientSession for making requests (already configured with base URL)
 
     Returns:
         max_throughput: Maximum workload units processed per second
     """
-    endpoint = f"{backend_url}/my-endpoint"
+    # IMPORTANT: Use relative path, NOT absolute URL
+    # The session is created with ClientSession(backend_url, ...), so it already has the base URL
+    endpoint = "/my-endpoint"
+
+    log.info(f"Benchmarking API at {backend_url}{endpoint}")
 
     # 1. Warmup (optional but recommended)
     log.info("Warming up...")
@@ -149,6 +153,7 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
         if response.status != 200:
             log.error("Warmup failed")
             return 1.0
+        await response.read()  # Ensure response is fully consumed
 
     # 2. Run multiple benchmark iterations
     max_throughput = 0
@@ -214,12 +219,13 @@ export VESPA_BENCHMARK="benchmarks.myapi:benchmark"
 
 ### Key Principles
 
-1. **Warmup First:** Send a warmup request to trigger model loading
-2. **Multiple Runs:** Run 3-8 iterations to find maximum throughput
-3. **Concurrent Requests:** Test with realistic concurrency (1-10 requests)
-4. **Return Max:** Return the maximum throughput, not average
-5. **Error Handling:** Gracefully handle failures and return 1.0 as fallback
-6. **Workload Units:** Choose meaningful units (tokens, pixels, requests, etc.)
+1. **⚠️ CRITICAL - Use Relative Paths:** The `session` parameter is created with `ClientSession(backend_url, ...)`, which means it already has a base URL configured. You **MUST** pass relative paths (e.g., `/v1/completions`) to `session.post()`, **NOT** absolute URLs (e.g., `http://localhost:8000/v1/completions`). Passing absolute URLs will cause an `AssertionError` in aiohttp.
+2. **Warmup First:** Send a warmup request to trigger model loading
+3. **Multiple Runs:** Run 3-8 iterations to find maximum throughput
+4. **Concurrent Requests:** Test with realistic concurrency (1-10 requests)
+5. **Return Max:** Return the maximum throughput, not average
+6. **Error Handling:** Gracefully handle failures and return 1.0 as fallback
+7. **Workload Units:** Choose meaningful units (tokens, pixels, requests, etc.)
 
 ### Workload Definition
 
@@ -245,8 +251,10 @@ from aiohttp import ClientSession
 from benchmarks.openai import benchmark
 
 async def test():
-    async with ClientSession() as session:
-        throughput = await benchmark('http://localhost:8000', session)
+    backend_url = 'http://localhost:8000'
+    # Create session with base URL, just like the real system does
+    async with ClientSession(backend_url) as session:
+        throughput = await benchmark(backend_url, session)
         print(f'Max throughput: {throughput} units/s')
 
 asyncio.run(test())
