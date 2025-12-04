@@ -530,7 +530,7 @@ class Backend:
         try:
             import requests
             response = requests.get(
-                f"{self.report_addr}/pubkey",
+                f"{self.report_addr}/pubkey/",
                 timeout=PUBKEY_FETCH_TIMEOUT
             )
             response.raise_for_status()
