@@ -21,14 +21,14 @@ Usage as a module:
     # Specify cost via workload parameter
     response = client.post("/v1/completions", json={"prompt": "test"}, workload=100.0)
 
-    # Or via X-Vast-Cost header
+    # Or via X-Serverless-Cost header
     response = client.post("/v1/completions", json={"prompt": "test"},
-                          headers={"X-Vast-Cost": "100"})
+                          headers={"X-Serverless-Cost": "100"})
 
 Then just point your app at localhost:8010 instead of the real API!
 
 Workload/Cost:
-- Specify via workload parameter or X-Vast-Cost header
+- Specify via workload parameter or X-Serverless-Cost header
 - Used for routing and queue estimation
 - Defaults to 1.0 if not specified
 """
@@ -118,6 +118,7 @@ class VastClient:
 
             data = response.json()
             log.debug(f"Got worker assignment: {data.get('url', 'unknown')}")
+            log.debug(f"Routing response: {data}")
             return data
 
         except Exception as e:
@@ -143,18 +144,18 @@ class VastClient:
             json: JSON payload (optional)
             data: Raw data payload (optional)
             headers: Additional headers (optional)
-            workload: Workload units (cost). If not specified, checks X-Vast-Cost header, defaults to 1.0
+            workload: Workload units (cost). If not specified, checks X-Serverless-Cost header, defaults to 1.0
             stream: Stream response (default: False)
 
         Returns:
             requests.Response object
         """
-        # Extract workload from X-Vast-Cost header if not explicitly provided
-        if workload is None and headers and "X-Vast-Cost" in headers:
+        # Extract workload from X-Serverless-Cost header if not explicitly provided
+        if workload is None and headers and "X-Serverless-Cost" in headers:
             try:
-                workload = float(headers["X-Vast-Cost"])
+                workload = float(headers["X-Serverless-Cost"])
             except (ValueError, TypeError):
-                log.warning(f"Invalid X-Vast-Cost header value: {headers['X-Vast-Cost']}, using default 1.0")
+                log.warning(f"Invalid X-Serverless-Cost header value: {headers['X-Serverless-Cost']}, using default 1.0")
                 workload = 1.0
 
         # Default to 1.0 if still not set
@@ -175,10 +176,10 @@ class VastClient:
 
         # Construct request to worker
         # IMPORTANT: Use the exact values from routing_info that were signed by the autoscaler
-        # Do NOT modify these values or signature verification will fail
+        # Do NOT modify these values (including types!) or signature verification will fail
         worker_url = routing_info["url"]
         auth_data = {
-            "cost": str(routing_info.get("cost", workload)),
+            "cost": routing_info.get("cost", workload),  # Keep original type (number, not string)!
             "endpoint": routing_info.get("endpoint", self.endpoint_name),  # Must match what was signed
             "reqnum": routing_info.get("reqnum", 0),
             "request_idx": routing_info.get("request_idx", 0),
@@ -301,14 +302,14 @@ class VastProxy:
         log.info(f"{method} {path}")
 
         try:
-            # Extract workload from X-Vast-Cost header if present
+            # Extract workload from X-Serverless-Cost header if present
             workload = None
-            if "X-Vast-Cost" in request.headers:
+            if "X-Serverless-Cost" in request.headers:
                 try:
-                    workload = float(request.headers["X-Vast-Cost"])
-                    log.debug(f"Using workload from X-Vast-Cost header: {workload}")
+                    workload = float(request.headers["X-Serverless-Cost"])
+                    log.debug(f"Using workload from X-Serverless-Cost header: {workload}")
                 except (ValueError, TypeError):
-                    log.warning(f"Invalid X-Vast-Cost header: {request.headers['X-Vast-Cost']}")
+                    log.warning(f"Invalid X-Serverless-Cost header: {request.headers['X-Serverless-Cost']}")
 
             # Read request body
             if request.can_read_body:

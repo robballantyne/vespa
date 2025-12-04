@@ -79,7 +79,7 @@ response = client.post(
         "prompt": "Quick response",
         "max_tokens": 10,
     },
-    headers={"X-Vast-Cost": "5"},  # Can also specify via header
+    headers={"X-Serverless-Cost": "5"},  # Can also specify via header
 )
 print("Low-cost completion:", response.status_code)
 
@@ -90,5 +90,5 @@ print("Health:", response.text)
 # The client handles all Vast.ai routing automatically:
 # - Calls /route/ to get worker assignment
 # - Wraps request in auth_data + payload
-# - Uses workload parameter, X-Vast-Cost header, or defaults to 1.0
+# - Uses workload parameter, X-Serverless-Cost header, or defaults to 1.0
 # - Returns standard requests.Response object

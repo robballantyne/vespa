@@ -201,7 +201,7 @@ print(response.json())
 
 ### Specifying Workload Cost
 
-You can specify the workload cost using the `X-Vast-Cost` header:
+You can specify the workload cost using the `X-Serverless-Cost` header:
 
 ```python
 import requests
@@ -209,7 +209,7 @@ import requests
 # Specify cost explicitly via header
 response = requests.post(
     "http://localhost:8010/v1/completions",
-    headers={"X-Vast-Cost": "500"},  # Indicate this request will use 500 workload units
+    headers={"X-Serverless-Cost": "500"},  # Indicate this request will use 500 workload units
     json={
         "prompt": "Write a long story",
         "max_tokens": 1000,
@@ -307,11 +307,11 @@ client.delete("/remove")
 # Option 1: Via workload parameter
 client.post("/v1/completions", json={...}, workload=500.0)
 
-# Option 2: Via X-Vast-Cost header (useful with proxy)
+# Option 2: Via X-Serverless-Cost header (useful with proxy)
 client.post(
     "/v1/completions",
     json={...},
-    headers={"X-Vast-Cost": "500"}
+    headers={"X-Serverless-Cost": "500"}
 )
 
 # Option 3: Default to 1.0 (if not specified)
@@ -448,13 +448,13 @@ curl http://localhost:8010/v1/completions \
 # Test POST request with explicit workload cost
 curl http://localhost:8010/v1/completions \
   -H "Content-Type: application/json" \
-  -H "X-Vast-Cost: 500" \
+  -H "X-Serverless-Cost: 500" \
   -d '{"prompt": "Long story", "max_tokens": 2000}'
 ```
 
 **Note:**
 - The client automatically handles GET/DELETE/HEAD requests by encoding auth_data as query parameters
-- Use `X-Vast-Cost` header to specify workload units (defaults to 1.0 if not specified)
+- Use `X-Serverless-Cost` header to specify workload units (defaults to 1.0 if not specified)
 - Workload cost is used for routing and queue estimation
 
 ### Production Setup

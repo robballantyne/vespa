@@ -19,7 +19,7 @@ class JsonDataException(Exception):
 class AuthData:
     """data used to authenticate requester"""
 
-    cost: str
+    cost: Union[str, float, int]  # Can be string or number (autoscaler sends as number)
     endpoint: str
     reqnum: int
     request_idx: int
