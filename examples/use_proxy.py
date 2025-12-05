@@ -34,5 +34,5 @@ print(response.json())
 # Works with ANY API:
 # - OpenAI: http://localhost:8010/v1/completions
 # - TGI: http://localhost:8010/generate
-# - ComfyUI: http://localhost:8010/runsync
+# - ComfyUI: http://localhost:8010/generate/sync
 # - Your API: http://localhost:8010/your/endpoint

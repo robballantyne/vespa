@@ -5,7 +5,7 @@ This script simulates multiple concurrent clients making requests to a Vast.ai e
 using the same test payloads as the benchmark functions.
 
 Usage:
-    python -m lib.test_utils -k YOUR_API_KEY -e endpoint-name -b benchmarks.openai -n 100 -rps 10
+    [MODEL_NAME="Qwen/Qwen3-8B"] python -m lib.test_utils -k YOUR_API_KEY -e endpoint-name -b benchmarks.openai -n 100 -rps 10
 """
 import logging
 import os

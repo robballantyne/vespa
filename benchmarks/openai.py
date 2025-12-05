@@ -134,8 +134,10 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
             try:
                 async with session.post(endpoint, json=payload) as response:
                     if response.status == 200:
-                        await response.read()  # Ensure response is fully consumed
-                        return workload
+                        data = await response.json()
+                        # Use actual completion tokens from response, fallback to max_tokens
+                        actual_tokens = data.get("usage", {}).get("completion_tokens", workload)
+                        return actual_tokens
                     else:
                         error_body = await response.text()
                         log.warning(
