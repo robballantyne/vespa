@@ -201,8 +201,9 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
                     sum_throughput += throughput
                     max_throughput = max(max_throughput, throughput)
 
+                    requests_per_sec = 1.0 / time_elapsed
                     log.info(
-                        f"Run {run}/{runs}: {WORKLOAD:.0f} workload in {time_elapsed:.2f}s = {throughput:.2f} workload/s"
+                        f"Run {run}/{runs}: {WORKLOAD:.0f} workload in {time_elapsed:.2f}s = {throughput:.2f} workload/s ({requests_per_sec:.3f} req/s)"
                     )
                 else:
                     error_body = await response.text()
@@ -214,8 +215,11 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
             log.warning(f"Run {run}/{runs} failed: {type(e).__name__}: {str(e)}")
 
     average_throughput = sum_throughput / runs if runs > 0 else 1.0
+    avg_req_per_sec = average_throughput / WORKLOAD
+    max_req_per_sec = max_throughput / WORKLOAD
     log.info(
-        f"Benchmark complete: avg={average_throughput:.2f} workload/s, max={max_throughput:.2f} workload/s"
+        f"Benchmark complete: avg={average_throughput:.2f} workload/s ({avg_req_per_sec:.3f} req/s), "
+        f"max={max_throughput:.2f} workload/s ({max_req_per_sec:.3f} req/s)"
     )
 
     return max_throughput if max_throughput > 0 else 1.0
