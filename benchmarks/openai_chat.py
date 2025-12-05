@@ -1,11 +1,11 @@
 """
-Benchmark function for OpenAI-compatible APIs (vLLM, Ollama, TGI, llama.cpp).
+Benchmark for OpenAI-compatible chat completion APIs (vLLM, Ollama, TGI, llama.cpp).
 
 This benchmark measures throughput in tokens per second by sending concurrent
-completion requests to the API.
+chat completion requests to the /v1/chat/completions endpoint.
 
 Usage:
-    VESPA_BENCHMARK=benchmarks.openai:benchmark
+    VESPA_BENCHMARK=benchmarks.openai_chat:benchmark
 
 Environment variables:
     MODEL_NAME: Model name to use in requests (default: "model")
@@ -28,6 +28,15 @@ except Exception:
 
 log = logging.getLogger(__name__)
 
+# System prompt used for benchmark and load test requests
+SYSTEM_PROMPT = """You are a helpful AI assistant. You have access to the following knowledge base:
+
+Zebras (US: /ˈziːbrəz/, UK: /ˈzɛbrəz, ˈziː-/)[2] (subgenus Hippotigris) are African equines
+with distinctive black-and-white striped coats. There are three living species: Grévy's zebra
+(Equus grevyi), the plains zebra (E. quagga), and the mountain zebra (E. zebra).
+
+Please answer the following question based on the above context."""
+
 
 def get_test_request() -> tuple[str, dict, float]:
     """
@@ -35,20 +44,23 @@ def get_test_request() -> tuple[str, dict, float]:
 
     Returns:
         tuple: (endpoint_path, payload, workload)
-            - endpoint_path: API endpoint (e.g., "/v1/completions")
+            - endpoint_path: API endpoint (e.g., "/v1/chat/completions")
             - payload: Request payload dict
             - workload: Workload cost (tokens)
     """
     model_name = os.environ.get("MODEL_NAME", "model")
 
     # Generate test prompt
-    prompt = " ".join(random.choices(WORD_LIST, k=250))
+    user_prompt = " ".join(random.choices(WORD_LIST, k=250))
     max_tokens = 500
 
-    endpoint = "/v1/completions"
+    endpoint = "/v1/chat/completions"
     payload = {
         "model": model_name,
-        "prompt": prompt,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
         "max_tokens": max_tokens,
         "temperature": 0.7,
     }
@@ -70,25 +82,19 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
         max_throughput: Maximum workload processed per second
     """
     model_name = os.environ.get("MODEL_NAME", "model")
-    endpoint = "/v1/completions"
+    endpoint = "/v1/chat/completions"
 
     log.info(f"Benchmarking OpenAI API at {backend_url}{endpoint}")
-
-    # Generate test prompt
-    system_prompt = """You are a helpful AI assistant. You have access to the following knowledge base:
-
-    Zebras (US: /ˈziːbrəz/, UK: /ˈzɛbrəz, ˈziː-/)[2] (subgenus Hippotigris) are African equines
-    with distinctive black-and-white striped coats. There are three living species: Grévy's zebra
-    (Equus grevyi), the plains zebra (E. quagga), and the mountain zebra (E. zebra).
-
-    Please answer the following question based on the above context."""
 
     # Initial warmup request
     log.info("Warming up...")
     warmup_prompt = " ".join(random.choices(WORD_LIST, k=50))
     warmup_payload = {
         "model": model_name,
-        "prompt": f"{system_prompt}\n\n{warmup_prompt}",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": warmup_prompt}
+        ],
         "max_tokens": 100,
         "temperature": 0.7,
     }
@@ -122,10 +128,13 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 8) -> 
 
         # Create benchmark payloads
         async def run_single_request():
-            prompt = " ".join(random.choices(WORD_LIST, k=250))
+            user_prompt = " ".join(random.choices(WORD_LIST, k=250))
             payload = {
                 "model": model_name,
-                "prompt": f"{system_prompt}\n\n{prompt}",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
                 "max_tokens": 500,
                 "temperature": 0.7,
             }

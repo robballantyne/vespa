@@ -6,7 +6,7 @@ It handles authentication, metrics tracking, and benchmarking.
 
 Environment variables:
 - VESPA_BACKEND_URL: URL of the backend server (e.g., http://localhost:8000)
-- VESPA_BENCHMARK: Python module path with benchmark function (e.g., benchmarks.openai:benchmark)
+- VESPA_BENCHMARK: Python module path with benchmark function (e.g., benchmarks.openai_chat:benchmark)
 - VESPA_HEALTHCHECK_ENDPOINT: Optional healthcheck endpoint (e.g., /health)
 - VESPA_ALLOW_PARALLEL: Whether to allow parallel requests (default: true)
 - VESPA_MAX_WAIT_TIME: Maximum queue wait time before rejecting (default: 10.0)
@@ -37,7 +37,7 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
     Load benchmark function from BENCHMARK env var.
 
     Format: module.path:function_name
-    Example: benchmarks.openai:benchmark
+    Example: benchmarks.openai_chat:benchmark
 
     The function should have signature:
         async def benchmark(backend_url: str, session: ClientSession) -> float:
@@ -48,7 +48,7 @@ def load_benchmark_function() -> Optional[Callable[[str, ClientSession], Awaitab
 
     if not benchmark_spec:
         log.warning("No VESPA_BENCHMARK env var set, worker will error on startup")
-        log.warning("Set VESPA_BENCHMARK to specify benchmark function (e.g., benchmarks.openai:benchmark)")
+        log.warning("Set VESPA_BENCHMARK to specify benchmark function (e.g., benchmarks.openai_chat:benchmark)")
         return None
 
     try:

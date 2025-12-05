@@ -5,7 +5,7 @@ This script simulates multiple concurrent clients making requests to a Vast.ai e
 using the same test payloads as the benchmark functions.
 
 Usage:
-    [MODEL_NAME="Qwen/Qwen3-8B"] python -m lib.test_utils -k YOUR_API_KEY -e endpoint-name -b benchmarks.openai -n 100 -rps 10
+    [MODEL_NAME="Qwen/Qwen3-8B"] python -m lib.test_utils -k YOUR_API_KEY -e endpoint-name -b benchmarks.openai_chat -n 100 -rps 10
 """
 import logging
 import os
@@ -271,7 +271,7 @@ if __name__ == "__main__":
         dest="benchmark_module",
         type=str,
         required=True,
-        help="Benchmark module (e.g., benchmarks.openai, benchmarks.tgi, benchmarks.comfyui)",
+        help="Benchmark module (e.g., benchmarks.openai_chat, benchmarks.tgi, benchmarks.comfyui)",
     )
     arg_parser.add_argument(
         "-n",

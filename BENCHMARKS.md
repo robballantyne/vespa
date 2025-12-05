@@ -4,9 +4,9 @@ Benchmark functions measure backend throughput for autoscaling.
 
 ## Built-in Benchmarks
 
-### OpenAI-Compatible (`benchmarks.openai`)
+### OpenAI Chat Completions (`benchmarks.openai_chat`)
 ```bash
-export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BENCHMARK="benchmarks.openai_chat:benchmark"
 export MODEL_NAME="meta-llama/Llama-2-7b-hf"
 ```
 Works with vLLM, Ollama, TGI (OpenAI mode), llama.cpp.
@@ -19,7 +19,17 @@ export VESPA_BENCHMARK="benchmarks.tgi:benchmark"
 ### ComfyUI (`benchmarks.comfyui`)
 ```bash
 export VESPA_BENCHMARK="benchmarks.comfyui:benchmark"
+
+# Optional: custom workflow file
+export VESPA_COMFYUI_BENCHMARK_FILE="/path/to/benchmark.json"
+
+# Fallback settings (used when no benchmark.json provided)
+export BENCHMARK_TEST_WIDTH=512
+export BENCHMARK_TEST_HEIGHT=512
+export BENCHMARK_TEST_STEPS=20
 ```
+Works with comfyui-json worker. Uses `/generate/sync` endpoint with fixed 100.0 workload.
+If no benchmark file is set, falls back to `Text2Image` modifier.
 
 ## Writing Custom Benchmarks
 
@@ -96,7 +106,7 @@ export VESPA_BENCHMARK="benchmarks.myapi:benchmark"
 ```python
 import asyncio
 from aiohttp import ClientSession
-from benchmarks.openai import benchmark
+from benchmarks.openai_chat import benchmark
 
 async def test():
     async with ClientSession("http://localhost:8000") as s:

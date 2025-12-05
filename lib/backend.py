@@ -592,7 +592,7 @@ class Backend:
                 error_msg = (
                     "No benchmark function provided. "
                     "Set VESPA_BENCHMARK environment variable to specify benchmark function. "
-                    "Example: VESPA_BENCHMARK=benchmarks.openai:benchmark"
+                    "Example: VESPA_BENCHMARK=benchmarks.openai_chat:benchmark"
                 )
                 log.error(error_msg)
                 self.backend_errored(error_msg)

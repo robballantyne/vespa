@@ -22,7 +22,7 @@ vespa/
 │   ├── data_types.py   # AuthData, RequestMetrics, ModelMetrics
 │   └── server.py       # aiohttp server setup
 ├── benchmarks/         # Benchmark functions
-│   ├── openai.py       # OpenAI-compatible APIs
+│   ├── openai_chat.py  # OpenAI chat completions
 │   ├── tgi.py          # Text Generation Inference
 │   └── comfyui.py      # ComfyUI
 └── start_server.sh     # Production startup script
@@ -56,7 +56,7 @@ vespa/
 ### Core Options
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VESPA_BENCHMARK` | None | Benchmark module (e.g., `benchmarks.openai:benchmark`) |
+| `VESPA_BENCHMARK` | None | Benchmark module (e.g., `benchmarks.openai_chat:benchmark`) |
 | `VESPA_HEALTHCHECK_ENDPOINT` | `/health` | Health check path |
 | `VESPA_ALLOW_PARALLEL` | `true` | Allow concurrent requests |
 | `VESPA_MAX_WAIT_TIME` | `10.0` | Max queue wait (seconds) |
@@ -125,7 +125,7 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
 ### Server (Vespa proxy)
 ```bash
 export VESPA_BACKEND_URL="http://localhost:8000"
-export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BENCHMARK="benchmarks.openai_chat:benchmark"
 export VESPA_WORKER_PORT="3000"
 export VESPA_UNSECURED="true"
 python server.py

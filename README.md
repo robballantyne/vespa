@@ -15,7 +15,7 @@ Lightweight HTTP proxy enabling serverless compute on Vast.ai for any backend AP
 
 ```bash
 export VESPA_BACKEND_URL="http://localhost:8000"
-export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BENCHMARK="benchmarks.openai_chat:benchmark"
 ./start_server.sh
 ```
 
@@ -23,7 +23,7 @@ export VESPA_BENCHMARK="benchmarks.openai:benchmark"
 
 ```bash
 export VESPA_BACKEND_URL="http://localhost:8000"
-export VESPA_BENCHMARK="benchmarks.openai:benchmark"
+export VESPA_BENCHMARK="benchmarks.openai_chat:benchmark"
 export VESPA_WORKER_PORT="3000"
 export VESPA_UNSECURED="true"
 python server.py
@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/v1/completions \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VESPA_BENCHMARK` | None | Benchmark module path (e.g., `benchmarks.openai:benchmark`) |
+| `VESPA_BENCHMARK` | None | Benchmark module path (e.g., `benchmarks.openai_chat:benchmark`) |
 | `VESPA_HEALTHCHECK_ENDPOINT` | `/health` | Health check path |
 | `VESPA_ALLOW_PARALLEL` | `true` | Allow concurrent requests |
 | `VESPA_MAX_WAIT_TIME` | `10.0` | Max queue wait (seconds) |
@@ -79,7 +79,7 @@ async def benchmark(backend_url: str, session: ClientSession) -> float:
 ```
 
 Built-in benchmarks:
-- `benchmarks.openai:benchmark` - OpenAI-compatible APIs
+- `benchmarks.openai_chat:benchmark` - OpenAI-compatible APIs
 - `benchmarks.tgi:benchmark` - Text Generation Inference
 - `benchmarks.comfyui:benchmark` - ComfyUI
 

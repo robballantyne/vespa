@@ -1,25 +1,35 @@
 """
-Benchmark function for ComfyUI image generation API.
+Benchmark for ComfyUI image generation API (comfyui-json worker).
 
-This benchmark measures throughput in workload units per second, where workload
-is calculated based on image resolution and generation steps.
+This benchmark measures throughput by sending image generation requests
+to the /generate/sync endpoint. Workload is fixed at 100.0 units per request.
 
 Usage:
-    BENCHMARK=benchmarks.comfyui:benchmark
+    VESPA_BENCHMARK=benchmarks.comfyui:benchmark
 
-ComfyUI workload calculation:
-    workload = (width * height * steps) / 1000 + resolution_adjustment
+Environment variables:
+    VESPA_COMFYUI_BENCHMARK_FILE: Path to benchmark.json workflow file (optional)
+    BENCHMARK_TEST_WIDTH: Fallback image width (default: 512)
+    BENCHMARK_TEST_HEIGHT: Fallback image height (default: 512)
+    BENCHMARK_TEST_STEPS: Fallback generation steps (default: 20)
 """
+import os
+import sys
+import json
 import time
 import random
 import logging
 import asyncio
 import traceback
-from aiohttp import ClientSession
+from pathlib import Path
+from aiohttp import ClientSession, ClientTimeout
 
 log = logging.getLogger(__name__)
 
-# Test prompts for image generation
+# Fixed workload for ComfyUI - represents % of a job completed
+WORKLOAD = 100.0
+
+# Test prompts for fallback image generation
 TEST_PROMPTS = [
     "a beautiful landscape with mountains and lakes",
     "a futuristic city at sunset",
@@ -28,39 +38,34 @@ TEST_PROMPTS = [
     "a majestic castle on a hilltop",
     "a vibrant flower garden in spring",
     "a cozy cabin in the snowy woods",
+    "an astronaut riding a horse on mars",
+    "a steampunk airship in the clouds",
+    "a magical forest with glowing mushrooms",
 ]
 
 
-def calculate_workload(width: int, height: int, steps: int) -> float:
+def load_benchmark_workflow() -> dict | None:
     """
-    Calculate ComfyUI workload based on resolution and steps.
+    Try to load a benchmark workflow from file.
 
-    This matches the calculation from the old ComfyUI worker.
+    Returns:
+        Workflow dict if found and valid, None otherwise.
+        Must be placed by docker image/provisioning script
     """
-    resolution = width * height
+    benchmark_file = os.environ.get("VESPA_COMFYUI_BENCHMARK_FILE")
 
-    # Resolution adjustments
-    if resolution <= 512 * 512:
-        resolution_adjustment = 0
-    elif resolution <= 768 * 768:
-        resolution_adjustment = 10
-    elif resolution <= 1024 * 1024:
-        resolution_adjustment = 20
-    else:
-        resolution_adjustment = 30
+    if benchmark_file:
+        path = Path(benchmark_file)
+        if path.exists():
+            try:
+                with open(path, "r") as f:
+                    workflow = json.load(f)
+                log.info(f"Loaded benchmark workflow from {benchmark_file}")
+                return workflow
+            except (json.JSONDecodeError, IOError) as e:
+                log.warning(f"Failed to load benchmark workflow from {benchmark_file}: {e}")
 
-    # Step adjustments
-    if steps <= 20:
-        step_adjustment = 0
-    elif steps <= 30:
-        step_adjustment = 5
-    else:
-        step_adjustment = 10
-
-    # Base workload calculation
-    workload = (resolution * steps) / 1000.0 + resolution_adjustment + step_adjustment
-
-    return workload
+    return None
 
 
 def get_test_request() -> tuple[str, dict, float]:
@@ -69,92 +74,40 @@ def get_test_request() -> tuple[str, dict, float]:
 
     Returns:
         tuple: (endpoint_path, payload, workload)
-            - endpoint_path: API endpoint (e.g., "/runsync")
+            - endpoint_path: API endpoint ("/generate/sync")
             - payload: Request payload dict
-            - workload: Workload cost (resolution * steps / 1000)
+            - workload: Fixed workload cost (100.0)
     """
-    # Standard test parameters
-    width = 512
-    height = 512
-    steps = 20
-    cfg = 7.0
-    sampler_name = "euler_ancestral"
-    scheduler = "normal"
+    endpoint = "/generate/sync"
 
-    # Random prompt and seed
-    prompt = random.choice(TEST_PROMPTS)
-    seed = random.randint(1, 1000000)
+    # Try to load benchmark workflow
+    workflow = load_benchmark_workflow()
 
-    # Simple workflow for testing
-    workflow = {
-        "3": {
-            "inputs": {
-                "seed": seed,
-                "steps": steps,
-                "cfg": cfg,
-                "sampler_name": sampler_name,
-                "scheduler": scheduler,
-                "denoise": 1,
-                "model": ["4", 0],
-                "positive": ["6", 0],
-                "negative": ["7", 0],
-                "latent_image": ["5", 0]
-            },
-            "class_type": "KSampler"
-        },
-        "4": {
-            "inputs": {
-                "ckpt_name": "model.safetensors"
-            },
-            "class_type": "CheckpointLoaderSimple"
-        },
-        "5": {
-            "inputs": {
-                "width": width,
-                "height": height,
-                "batch_size": 1
-            },
-            "class_type": "EmptyLatentImage"
-        },
-        "6": {
-            "inputs": {
-                "text": prompt,
-                "clip": ["4", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "7": {
-            "inputs": {
-                "text": "nsfw, nude, text, watermark",
-                "clip": ["4", 1]
-            },
-            "class_type": "CLIPTextEncode"
-        },
-        "8": {
-            "inputs": {
-                "samples": ["3", 0],
-                "vae": ["4", 2]
-            },
-            "class_type": "VAEDecode"
-        },
-        "9": {
-            "inputs": {
-                "filename_prefix": "ComfyUI",
-                "images": ["8", 0]
-            },
-            "class_type": "SaveImage"
+    if workflow:
+        payload = {
+            "input": {
+                "request_id": f"test-{random.randint(1000, 99999)}",
+                "workflow_json": workflow
+            }
         }
-    }
-
-    endpoint = "/runsync"
-    payload = {
-        "input": {
-            "workflow_json": workflow
+    else:
+        # Fallback to modifier-based request
+        test_prompt = random.choice(TEST_PROMPTS)
+        payload = {
+            "input": {
+                "request_id": f"test-{random.randint(1000, 99999)}",
+                "modifier": "Text2Image",
+                "modifications": {
+                    "prompt": test_prompt,
+                    "width": int(os.environ.get("BENCHMARK_TEST_WIDTH", 512)),
+                    "height": int(os.environ.get("BENCHMARK_TEST_HEIGHT", 512)),
+                    "steps": int(os.environ.get("BENCHMARK_TEST_STEPS", 20)),
+                    "seed": random.randint(0, sys.maxsize),
+                }
+            }
         }
-    }
-    workload = calculate_workload(width, height, steps)
 
-    return endpoint, payload, workload
+    return endpoint, payload, WORKLOAD
 
 
 async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> float:
@@ -169,95 +122,49 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
     Returns:
         max_throughput: Maximum workload units processed per second
     """
-    # ComfyUI typically uses port 8188 and has /runsync endpoint for synchronous execution
-    endpoint = "/runsync"
+    endpoint = "/generate/sync"
 
     log.info(f"Benchmarking ComfyUI API at {backend_url}{endpoint}")
 
-    # Standard benchmark parameters
-    width = 512
-    height = 512
-    steps = 20
-    cfg = 7.0
-    sampler_name = "euler_ancestral"
-    scheduler = "normal"
+    # Try to load benchmark workflow
+    workflow = load_benchmark_workflow()
 
-    # Calculate expected workload per request
-    workload_per_request = calculate_workload(width, height, steps)
-    log.info(f"Workload per request: {workload_per_request:.2f} units")
+    if workflow:
+        log.info("Using custom benchmark workflow from file")
+    else:
+        log.info("Using fallback Text2Image modifier for benchmarking")
 
-    # Simple workflow for benchmarking
-    # This is a minimal text-to-image workflow
-    def create_workflow(prompt: str, seed: int):
-        return {
-            "3": {
-                "inputs": {
-                    "seed": seed,
-                    "steps": steps,
-                    "cfg": cfg,
-                    "sampler_name": sampler_name,
-                    "scheduler": scheduler,
-                    "denoise": 1,
-                    "model": ["4", 0],
-                    "positive": ["6", 0],
-                    "negative": ["7", 0],
-                    "latent_image": ["5", 0]
-                },
-                "class_type": "KSampler"
-            },
-            "4": {
-                "inputs": {
-                    "ckpt_name": "model.safetensors"
-                },
-                "class_type": "CheckpointLoaderSimple"
-            },
-            "5": {
-                "inputs": {
-                    "width": width,
-                    "height": height,
-                    "batch_size": 1
-                },
-                "class_type": "EmptyLatentImage"
-            },
-            "6": {
-                "inputs": {
-                    "text": prompt,
-                    "clip": ["4", 1]
-                },
-                "class_type": "CLIPTextEncode"
-            },
-            "7": {
-                "inputs": {
-                    "text": "nsfw, nude, text, watermark",
-                    "clip": ["4", 1]
-                },
-                "class_type": "CLIPTextEncode"
-            },
-            "8": {
-                "inputs": {
-                    "samples": ["3", 0],
-                    "vae": ["4", 2]
-                },
-                "class_type": "VAEDecode"
-            },
-            "9": {
-                "inputs": {
-                    "filename_prefix": "ComfyUI",
-                    "images": ["8", 0]
-                },
-                "class_type": "SaveImage"
+    def create_payload() -> dict:
+        """Create a benchmark request payload."""
+        if workflow:
+            return {
+                "input": {
+                    "request_id": f"benchmark-{random.randint(1000, 99999)}",
+                    "workflow_json": workflow
+                }
             }
-        }
+        else:
+            test_prompt = random.choice(TEST_PROMPTS)
+            return {
+                "input": {
+                    "request_id": f"benchmark-{random.randint(1000, 99999)}",
+                    "modifier": "Text2Image",
+                    "modifications": {
+                        "prompt": test_prompt,
+                        "width": int(os.environ.get("BENCHMARK_TEST_WIDTH", 512)),
+                        "height": int(os.environ.get("BENCHMARK_TEST_HEIGHT", 512)),
+                        "steps": int(os.environ.get("BENCHMARK_TEST_STEPS", 20)),
+                        "seed": random.randint(0, sys.maxsize),
+                    }
+                }
+            }
 
     # Initial warmup request
     log.info("Warming up...")
-    warmup_prompt = random.choice(TEST_PROMPTS)
-    warmup_payload = {
-        "workflow_json": create_workflow(warmup_prompt, random.randint(1, 1000000))
-    }
+    warmup_payload = create_payload()
 
     try:
-        async with session.post(endpoint, json={"input": warmup_payload}, timeout=300) as response:
+        async with session.post(endpoint, json=warmup_payload, timeout=ClientTimeout(total=600)) as response:
             if response.status != 200:
                 error_body = await response.text()
                 log.error(
@@ -265,7 +172,7 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
                     f"Response: {error_body[:500]}"
                 )
                 return 1.0
-            await response.read()  # Ensure response is fully consumed
+            await response.read()
             log.info("Warmup successful")
     except Exception as e:
         log.error(
@@ -276,57 +183,35 @@ async def benchmark(backend_url: str, session: ClientSession, runs: int = 3) -> 
         return 1.0
 
     # Run benchmark
-    # Note: ComfyUI typically can't handle parallel requests well, so we run sequentially
-    max_throughput = 0
-    sum_throughput = 0
-    concurrent_requests = 1  # Sequential for ComfyUI
+    # ComfyUI typically handles one request at a time
+    max_throughput = 0.0
+    sum_throughput = 0.0
 
     for run in range(1, runs + 1):
         start = time.time()
 
-        async def run_single_request():
-            prompt = random.choice(TEST_PROMPTS)
-            seed = random.randint(1, 1000000)
-            payload = {
-                "workflow_json": create_workflow(prompt, seed)
-            }
+        payload = create_payload()
 
-            try:
-                # ComfyUI can take a long time, set generous timeout
-                async with session.post(endpoint, json={"input": payload}, timeout=300) as response:
-                    if response.status == 200:
-                        await response.read()  # Ensure response is fully consumed
-                        return workload_per_request
-                    else:
-                        error_body = await response.text()
-                        log.warning(
-                            f"Request failed with status {response.status}\n"
-                            f"Response: {error_body[:200]}"
-                        )
-                        return 0
-            except Exception as e:
-                log.warning(f"Request failed: {type(e).__name__}: {str(e)}")
-                return 0
+        try:
+            async with session.post(endpoint, json=payload, timeout=ClientTimeout(total=600)) as response:
+                if response.status == 200:
+                    await response.read()
+                    time_elapsed = time.time() - start
+                    throughput = WORKLOAD / time_elapsed
+                    sum_throughput += throughput
+                    max_throughput = max(max_throughput, throughput)
 
-        # Run requests (sequential for ComfyUI)
-        results = await asyncio.gather(*[run_single_request() for _ in range(concurrent_requests)])
-
-        total_workload = sum(results)
-        time_elapsed = time.time() - start
-        successful = sum(1 for w in results if w > 0)
-
-        if successful == 0:
-            log.error(f"Benchmark run {run} failed: no successful responses")
-            continue
-
-        throughput = total_workload / time_elapsed
-        sum_throughput += throughput
-        max_throughput = max(max_throughput, throughput)
-
-        log.info(
-            f"Run {run}/{runs}: {successful}/{concurrent_requests} successful, "
-            f"{total_workload:.2f} workload in {time_elapsed:.2f}s = {throughput:.2f} workload/s"
-        )
+                    log.info(
+                        f"Run {run}/{runs}: {WORKLOAD:.0f} workload in {time_elapsed:.2f}s = {throughput:.2f} workload/s"
+                    )
+                else:
+                    error_body = await response.text()
+                    log.warning(
+                        f"Run {run}/{runs} failed with status {response.status}\n"
+                        f"Response: {error_body[:200]}"
+                    )
+        except Exception as e:
+            log.warning(f"Run {run}/{runs} failed: {type(e).__name__}: {str(e)}")
 
     average_throughput = sum_throughput / runs if runs > 0 else 1.0
     log.info(
